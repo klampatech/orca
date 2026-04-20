@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orca-orchestrator"
+version = "0.1.0"
+description = "Ralph Loop Orchestrator — Shared task coordination for autonomous Ralph loops"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Ralph Project"}
+]
+
+[project.scripts]
+orca = "orca.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["orca*"]
