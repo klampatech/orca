@@ -1,0 +1,324 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OrcaSpec",
+  "description": "Validated spec as structured IR for Orca task decomposition into independently claimable tasks.",
+  "type": "object",
+  "required": ["project", "coreFeatures", "technicalApproach", "testingStrategy", "acceptanceCriteria"],
+
+  "properties": {
+    "project": {
+      "type": "object",
+      "required": ["name", "vision", "targetUsers", "problemStatement"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Z][a-zA-Z0-9 ]+$",
+          "description": "PascalCase project name"
+        },
+        "vision": {
+          "type": "string",
+          "minLength": 20,
+          "description": "2-3 sentence description of what this project is and why it exists"
+        },
+        "targetUsers": {
+          "type": "string",
+          "minLength": 10
+        },
+        "problemStatement": {
+          "type": "string",
+          "minLength": 20
+        },
+        "successCriteria": {
+          "type": "string",
+          "minLength": 20
+        }
+      }
+    },
+
+    "coreFeatures": {
+      "type": "object",
+      "required": ["mustHave"],
+      "properties": {
+        "mustHave": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "description"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^FEAT-[0-9]+$"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 10
+              },
+              "edgeCases": {
+                "type": "array",
+                "items": { "type": "string" },
+                "default": []
+              },
+              "acceptanceCriteria": {
+                "type": "object",
+                "description": "Per-feature acceptance criteria — used by Orca decompose to create claimable tasks",
+                "properties": {
+                  "happyPath": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["criterion"],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^AC-[0-9]+$",
+                          "description": "Unique ID for this acceptance criterion, e.g. AC-001"
+                        },
+                        "criterion": {
+                          "type": "string",
+                          "pattern": "^Given.*When.*Then.*$",
+                          "description": "Given/When/Then format"
+                        }
+                      }
+                    }
+                  },
+                  "errorHandling": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["criterion"],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^AC-[0-9]+$"
+                        },
+                        "criterion": {
+                          "type": "string",
+                          "pattern": "^Given.*When.*Then.*$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "shouldHave": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "description"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^FEAT-[0-9]+$" },
+              "description": { "type": "string", "minLength": 10 },
+              "edgeCases": {
+                "type": "array",
+                "items": { "type": "string" },
+                "default": []
+              },
+              "acceptanceCriteria": {
+                "type": "object",
+                "properties": {
+                  "happyPath": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["id", "criterion"],
+                      "properties": {
+                        "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
+                        "criterion": { "type": "string", "pattern": "^Given.*When.*Then.*$" }
+                      }
+                    }
+                  },
+                  "errorHandling": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["id", "criterion"],
+                      "properties": {
+                        "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
+                        "criterion": { "type": "string", "pattern": "^Given.*When.*Then.*$" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "niceToHave": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "description"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^FEAT-[0-9]+$" },
+              "description": { "type": "string", "minLength": 10 },
+              "edgeCases": {
+                "type": "array",
+                "items": { "type": "string" },
+                "default": []
+              },
+              "acceptanceCriteria": {
+                "type": "object",
+                "properties": {
+                  "happyPath": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["id", "criterion"],
+                      "properties": {
+                        "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
+                        "criterion": { "type": "string", "pattern": "^Given.*When.*Then.*$" }
+                      }
+                    }
+                  },
+                  "errorHandling": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["id", "criterion"],
+                      "properties": {
+                        "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
+                        "criterion": { "type": "string", "pattern": "^Given.*When.*Then.*$" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "technicalApproach": {
+      "type": "object",
+      "required": ["language", "architecture"],
+      "properties": {
+        "language": {
+          "type": "string",
+          "enum": ["python", "typescript", "javascript", "go", "rust", "java", "csharp", "cpp", "ruby", "php", "swift", "kotlin", "scala", "bash", "unknown"],
+          "description": "Primary language. Use 'unknown' if flexible."
+        },
+        "architecture": {
+          "type": "string",
+          "enum": ["monolith", "microservices", "serverless", "library", "cli", "daemon", "web", "mobile", "desktop", "embedded", "unknown"],
+          "description": "Architecture style"
+        },
+        "framework": {
+          "type": "string",
+          "default": "none"
+        },
+        "apiStyle": {
+          "type": "string",
+          "enum": ["rest", "graphql", "grpc", "websocket", "cli-only", "none", "unknown"],
+          "default": "none"
+        },
+        "database": {
+          "type": "string",
+          "default": "none"
+        },
+        "deployment": {
+          "type": "string",
+          "enum": ["local", "docker", "kubernetes", "cloud-functions", "vm", "serverless", "static", "unknown"],
+          "default": "unknown"
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+
+    "testingStrategy": {
+      "type": "object",
+      "required": ["unitTests", "integrationTests"],
+      "properties": {
+        "unitTests": {
+          "type": "object",
+          "required": ["covered"],
+          "properties": {
+            "covered": { "type": "boolean" },
+            "framework": { "type": "string", "default": "unknown" },
+            "coverageTarget": { "type": "number", "minimum": 0, "maximum": 100, "default": 80 }
+          }
+        },
+        "integrationTests": {
+          "type": "object",
+          "required": ["covered"],
+          "properties": {
+            "covered": { "type": "boolean" },
+            "approach": {
+              "type": "string",
+              "enum": ["real-instances", "mocks", "test-containers", "none"],
+              "default": "none"
+            }
+          }
+        },
+        "e2eTests": {
+          "type": "object",
+          "properties": {
+            "covered": { "type": "boolean" },
+            "tool": { "type": "string" },
+            "keyJourneys": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "antiCheating": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "How to verify tests aren't being cheated"
+        }
+      }
+    },
+
+    "acceptanceCriteria": {
+      "type": "object",
+      "description": "Project-level acceptance criteria — holistic validation, NOT used for task decomposition. For per-feature task creation, use coreFeatures[].acceptanceCriteria instead.",
+      "properties": {
+        "happyPath": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^Given.*When.*Then.*$"
+          }
+        },
+        "errorHandling": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^Given.*When.*Then.*$"
+          }
+        },
+        "performance": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "security": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "outOfScope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "version": { "type": "string" },
+        "created": { "type": "string", "format": "date" },
+        "author": { "type": "string" }
+      }
+    }
+  }
+}
