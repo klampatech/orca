@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     result_summary  TEXT,
     parent_id       TEXT REFERENCES tasks(id),
     root_spec_path  TEXT,
+    ir_snippet      TEXT,  -- JSON IR section for this task (Phase 1 IR validator)
     CHECK (status IN ('available', 'claimed', 'completed', 'failed'))
 );
 

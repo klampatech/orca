@@ -4,7 +4,8 @@
 Usage:
     orca init [--loop-id ID]
     orca add <spec> <description> [--priority N]
-    orca decompose <spec.md> [description] [--priority N] [--dry-run]
+    orca decompose <spec.md> [--priority N] [--dry-run]
+    orca refine <spec.md> [--output <path>] [--max-iterations N] [--pi-skill <name>]
     orca claim [--loop-id ID]
     orca heartbeat <task-id> [--loop-id ID]
     orca complete <task-id> [--loop-id ID] [--result TEXT]
@@ -99,6 +100,13 @@ def build_parser() -> argparse.ArgumentParser:
     decomp.add_argument("description", nargs="?", help="Override feature title")
     decomp.add_argument("--priority", type=int, default=0, help="Base priority (default: 0)")
     decomp.add_argument("--dry-run", action="store_true", help="Show tasks without creating them")
+
+    # refine
+    refine = sub.add_parser("refine", help="Refine raw spec into valid spec.ir.json using pi")
+    refine.add_argument("spec", help="Path to raw spec file (any format)")
+    refine.add_argument("--output", help="Override output path (default: <spec-dir>/spec.ir.json)")
+    refine.add_argument("--max-iterations", type=int, default=5, help="Max refine loops (default: 5)")
+    refine.add_argument("--pi-skill", default="ir-spec-generator", help="pi skill to use (default: ir-spec-generator)")
 
     # loop
     loop = sub.add_parser("loop", help="Spawn a Ralph loop in a new terminal window")
