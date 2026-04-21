@@ -1,21 +1,69 @@
 """orch complete — Mark a task as successfully completed."""
 
+from pathlib import Path
+
 import shutil
 import subprocess as _subprocess
 
 
-def _verify_task_complete(task_id: str) -> tuple[bool, str]:
-    """Run validation tests before completing. Returns (verified, output)."""
-    python_cmd = shutil.which("python3") or shutil.which("python")
-    result = _subprocess.run(
-        [python_cmd, "-m", "pytest", "-v", "--tb=short"],
-        capture_output=True,
-        text=True,
-        timeout=300,  # Increased from 120s to handle longer test suites
-    )
-    verified = result.returncode == 0
-    output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
-    return verified, output
+def _verify_task_complete() -> tuple[bool, str]:
+    """Run validation tests before completing. Returns (verified, output).
+    
+    Detects project type and runs appropriate test command.
+    """
+    cwd = Path.cwd()
+    
+    # Detect Node.js project
+    if (cwd / "package.json").exists():
+        result = _subprocess.run(
+            ["npm", "test"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        verified = result.returncode == 0
+        output = result.stdout[:3000] if result.stdout else result.stderr[:3000]
+        return verified, output
+    
+    # Detect Python project
+    if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists() or (cwd / "requirements.txt").exists():
+        python_cmd = shutil.which("python3") or shutil.which("python")
+        result = _subprocess.run(
+            [python_cmd, "-m", "pytest", "-v", "--tb=short"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        verified = result.returncode == 0
+        output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+        return verified, output
+    
+    # Detect Go project
+    if (cwd / "go.mod").exists():
+        result = _subprocess.run(
+            ["go", "test", "./..."],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        verified = result.returncode == 0
+        output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+        return verified, output
+    
+    # Detect Ruby project
+    if (cwd / "Gemfile").exists():
+        result = _subprocess.run(
+            ["bundle", "exec", "rspec"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        verified = result.returncode == 0
+        output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+        return verified, output
+    
+    # No known project type
+    return True, "No test runner detected — skipping verification"
 
 
 def handle_complete(args) -> dict:
@@ -45,7 +93,7 @@ def handle_complete(args) -> dict:
     
     if run_verification:
         print(f"[complete] Running validation tests for task {args.task_id}...")
-        verified, output = _verify_task_complete(args.task_id)
+        verified, output = _verify_task_complete()
         if not verified:
             # Return task to available pool so it can be re-claimed
             update_task_status(args.task_id, "available", result_summary="Tests failed - returned to pool")

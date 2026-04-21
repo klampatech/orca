@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import json
 import shutil
 import subprocess
@@ -66,17 +68,71 @@ def _run_pi(prompt: str) -> str:
 
 
 def _run_tests() -> tuple[bool, str]:
-    """Run pytest and return (success, output)."""
-    python_cmd = shutil.which("python3") or shutil.which("python")
-    result = subprocess.run(
-        [python_cmd, "-m", "pytest", "-v", "--tb=short"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    success = result.returncode == 0
-    output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
-    return success, output
+    """Run project tests and return (success, output).
+    
+    Detects project type and runs appropriate test command:
+    - Node.js (package.json): npm test
+    - Python (pytest, pyproject.toml, setup.py): python -m pytest
+    - Go (go.mod): go test
+    - Ruby (Gemfile): bundle exec rspec
+    """
+    cwd = Path.cwd()
+    
+    # Detect Node.js project
+    if (cwd / "package.json").exists():
+        result = subprocess.run(
+            ["npm", "test"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        success = result.returncode == 0
+        output = result.stdout[:3000] if result.stdout else result.stderr[:3000]
+        return success, output
+    
+    # Detect Python project
+    has_pyproject = (cwd / "pyproject.toml").exists()
+    has_setup = (cwd / "setup.py").exists()
+    has_requirements = (cwd / "requirements.txt").exists()
+    
+    if has_pyproject or has_setup or has_requirements:
+        python_cmd = shutil.which("python3") or shutil.which("python")
+        result = subprocess.run(
+            [python_cmd, "-m", "pytest", "-v", "--tb=short"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        success = result.returncode == 0
+        output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+        return success, output
+    
+    # Detect Go project
+    if (cwd / "go.mod").exists():
+        result = subprocess.run(
+            ["go", "test", "./..."],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        success = result.returncode == 0
+        output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+        return success, output
+    
+    # Detect Ruby project (Rails or RSpec)
+    if (cwd / "Gemfile").exists():
+        result = subprocess.run(
+            ["bundle", "exec", "rspec"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        success = result.returncode == 0
+        output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+        return success, output
+    
+    # No known project type detected
+    return False, "No test runner detected (no package.json, pyproject.toml, go.mod, or Gemfile found)"
 
 
 def _send_heartbeat(task_id: str, loop_id: str, stop_event: threading.Event) -> None:
@@ -91,26 +147,48 @@ def _send_heartbeat(task_id: str, loop_id: str, stop_event: threading.Event) -> 
             break
 
 
-def _do_work(task_id: str, description: str, spec_path: str | None, loop_id: str) -> str:
+def _do_work(task_id: str, description: str, spec_path: str | None, ir_snippet: str | None, loop_id: str) -> str:
     """Run pi to implement the given task, validate with tests. Returns result summary."""
-    # Test-first prompting: ask pi to write tests BEFORE implementation
-    test_first_prompt = f"""You are Otto — an autonomous AI coding agent.
-
-Implement the following task using TDD (Test-Driven Development). Work in the current directory.
-
-## Scenario
-{description}
-
-## Instructions (follow in order)
-1. If a spec file exists at "{spec_path}", read it first to understand requirements
-2. Write failing tests FIRST (red phase)
-3. Implement the feature to make tests pass (green phase)
-4. Run tests to verify correctness
-5. Commit and push
-
-IMPORTANT: You MUST write tests before implementing. Do not skip the test-writing phase.
-
-Return a brief summary of what you did, including test results."""
+    # Build the prompt with optional IR snippet injection (Phase 1 IR validator)
+    prompt_parts = [
+        "You are Otto — an autonomous AI coding agent.\n",
+        "Implement the following task using TDD (Test-Driven Development). Work in the current directory.\n",
+    ]
+    
+    # Inject IR snippet if available
+    if ir_snippet:
+        try:
+            snippet_json = json.loads(ir_snippet)
+            prompt_parts.append("## IR Spec Snippet (do not skip — this defines what \"done\" means)")
+            prompt_parts.append(json.dumps(snippet_json, indent=2))
+            prompt_parts.append("")
+        except (json.JSONDecodeError, TypeError):
+            # If not valid JSON, include as raw text
+            prompt_parts.append("## IR Spec Snippet")
+            prompt_parts.append(str(ir_snippet))
+            prompt_parts.append("")
+    
+    prompt_parts.extend([
+        "## Scenario",
+        description,
+        "",
+        "## Instructions (follow in order)",
+        "1. If a spec file exists at the path below, read it first to understand requirements",
+        "2. Write failing tests FIRST (red phase)",
+        "3. Implement the feature to make tests pass (green phase)",
+        "4. Run tests to verify correctness",
+        "5. Commit and push",
+        "",
+        "IMPORTANT: You MUST write tests before implementing. Do not skip the test-writing phase.\n",
+    ])
+    
+    if spec_path:
+        prompt_parts.append(f"Spec file: {spec_path}")
+    
+    prompt_parts.append("Return a brief summary of what you did, including test results.")
+    
+    test_first_prompt = "\n".join(prompt_parts)
+    
     stop_heartbeat = threading.Event()
     heartbeat_thread = threading.Thread(target=_send_heartbeat, args=(task_id, loop_id, stop_heartbeat), daemon=True)
     heartbeat_thread.start()
@@ -185,8 +263,9 @@ def handle_loop(args) -> dict:
             info = _get_task_info(task_id)
             description = info.get("description", "") if info else ""
             spec_path = info.get("spec_path") if info else None
+            ir_snippet = info.get("ir_snippet") if info else None
             try:
-                result_text = _do_work(task_id, description, spec_path, loop_id)
+                result_text = _do_work(task_id, description, spec_path, ir_snippet, loop_id)
                 print(f"[loop] pi done: {result_text[:100]}")
                 _complete_task(task_id, result_text[:500])
             except Exception as e:
@@ -201,13 +280,14 @@ def handle_loop(args) -> dict:
         if task_id is not None:
             print(f"[loop] Claimed {task_id}")
 
-            # Get full task info for description + spec
+            # Get full task info for description + spec + ir_snippet (Phase 1)
             info = _get_task_info(task_id)
             description = info.get("description", "") if info else ""
             spec_path = info.get("spec_path") if info else None
+            ir_snippet = info.get("ir_snippet") if info else None
 
             try:
-                result_text = _do_work(task_id, description, spec_path, loop_id)
+                result_text = _do_work(task_id, description, spec_path, ir_snippet, loop_id)
                 print(f"[loop] pi done: {result_text[:100]}")
                 _complete_task(task_id, result_text[:500])
             except Exception as e:

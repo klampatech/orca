@@ -53,5 +53,12 @@ def format_info_human(result: dict) -> str:
         lines.append(f"Parent: {task['parent_id']}")
     if task.get("result_summary"):
         lines.append(f"Result: {task['result_summary']}")
+    
+    # Show IR snippet if present (Phase 1 IR validator)
+    if task.get("ir_snippet"):
+        lines.append("")
+        lines.append("IR Snippet:")
+        lines.append("-" * 60)
+        lines.append(task["ir_snippet"][:500])  # Truncate for display
 
     return "\n".join(lines)

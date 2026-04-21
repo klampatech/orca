@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 import uuid
 from typing import Any, Optional
 
@@ -16,6 +15,7 @@ def create_task(
     priority: int = 0,
     parent_id: str | None = None,
     root_spec_path: str | None = None,
+    ir_snippet: str | None = None,
 ) -> dict[str, Any]:
     """Add a new task to the backlog.
 
@@ -25,6 +25,7 @@ def create_task(
         priority: Task priority (higher = more important).
         parent_id: Optional ID of parent task (for decomposed sub-tasks).
         root_spec_path: Optional path to the original spec file.
+        ir_snippet: Optional JSON IR section for IR-based tasks (Phase 1).
 
     Returns:
         The created task record.
@@ -35,10 +36,10 @@ def create_task(
 
     conn.execute(
         """
-        INSERT INTO tasks (id, spec_path, description, status, priority, created_at, parent_id, root_spec_path)
-        VALUES (?, ?, ?, 'available', ?, ?, ?, ?)
+        INSERT INTO tasks (id, spec_path, description, status, priority, created_at, parent_id, root_spec_path, ir_snippet)
+        VALUES (?, ?, ?, 'available', ?, ?, ?, ?, ?)
         """,
-        (task_id, spec_path, description, priority, now, parent_id, root_spec_path),
+        (task_id, spec_path, description, priority, now, parent_id, root_spec_path, ir_snippet),
     )
 
     return {
@@ -48,8 +49,12 @@ def create_task(
         "status": "available",
         "priority": priority,
         "created_at": now,
+        "claimed_at": None,
+        "completed_at": None,
+        "result_summary": None,
         "parent_id": parent_id,
         "root_spec_path": root_spec_path,
+        "ir_snippet": ir_snippet,
     }
 
 
@@ -57,7 +62,7 @@ def create_tasks_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Add multiple tasks to the backlog in a single transaction.
 
     Args:
-        tasks: List of task dicts with keys: description, spec_path, priority, parent_id, root_spec_path.
+        tasks: List of task dicts with keys: description, spec_path, priority, parent_id, root_spec_path, ir_snippet.
 
     Returns:
         List of created task records with generated IDs.
@@ -70,8 +75,8 @@ def create_tasks_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         task_id = str(uuid.uuid4())
         conn.execute(
             """
-            INSERT INTO tasks (id, spec_path, description, status, priority, created_at, parent_id, root_spec_path)
-            VALUES (?, ?, ?, 'available', ?, ?, ?, ?)
+            INSERT INTO tasks (id, spec_path, description, status, priority, created_at, parent_id, root_spec_path, ir_snippet)
+            VALUES (?, ?, ?, 'available', ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -81,6 +86,7 @@ def create_tasks_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 now,
                 task_data.get("parent_id"),
                 task_data.get("root_spec_path"),
+                task_data.get("ir_snippet"),
             ),
         )
         created.append({
@@ -90,8 +96,12 @@ def create_tasks_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "status": "available",
             "priority": task_data.get("priority", 0),
             "created_at": now,
+            "claimed_at": None,
+            "completed_at": None,
+            "result_summary": None,
             "parent_id": task_data.get("parent_id"),
             "root_spec_path": task_data.get("root_spec_path"),
+            "ir_snippet": task_data.get("ir_snippet"),
         })
 
     conn.commit()
@@ -106,7 +116,7 @@ def get_task(task_id: str) -> Optional[dict[str, Any]]:
     """
     conn = get_connection()
     row = conn.execute(
-        "SELECT id, spec_path, description, status, priority, created_at, claimed_at, completed_at, result_summary, parent_id, root_spec_path FROM tasks WHERE id = ?",
+        "SELECT id, spec_path, description, status, priority, created_at, claimed_at, completed_at, result_summary, parent_id, root_spec_path, ir_snippet FROM tasks WHERE id = ?",
         (task_id,),
     ).fetchone()
 
@@ -125,6 +135,7 @@ def get_task(task_id: str) -> Optional[dict[str, Any]]:
         "result_summary": row[8],
         "parent_id": row[9],
         "root_spec_path": row[10],
+        "ir_snippet": row[11],
     }
 
 
@@ -140,12 +151,12 @@ def list_tasks(status: Optional[str] = None) -> list[dict[str, Any]]:
     conn = get_connection()
     if status:
         rows = conn.execute(
-            "SELECT id, spec_path, description, status, priority, created_at, claimed_at, completed_at, result_summary, parent_id, root_spec_path FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC",
+            "SELECT id, spec_path, description, status, priority, created_at, claimed_at, completed_at, result_summary, parent_id, root_spec_path, ir_snippet FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC",
             (status,),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, spec_path, description, status, priority, created_at, claimed_at, completed_at, result_summary, parent_id, root_spec_path FROM tasks ORDER BY priority DESC, created_at ASC",
+            "SELECT id, spec_path, description, status, priority, created_at, claimed_at, completed_at, result_summary, parent_id, root_spec_path, ir_snippet FROM tasks ORDER BY priority DESC, created_at ASC",
         ).fetchall()
 
     return [
@@ -161,6 +172,7 @@ def list_tasks(status: Optional[str] = None) -> list[dict[str, Any]]:
             "result_summary": r[8],
             "parent_id": r[9],
             "root_spec_path": r[10],
+            "ir_snippet": r[11],
         }
         for r in rows
     ]
@@ -210,7 +222,7 @@ def claim_task(loop_id: str) -> Optional[dict[str, Any]]:
 
     row = conn.execute(
         """
-        SELECT id, spec_path, description, priority, parent_id, root_spec_path
+        SELECT id, spec_path, description, priority, parent_id, root_spec_path, ir_snippet
         FROM tasks
         WHERE status = 'available'
         ORDER BY priority DESC, created_at ASC
@@ -249,6 +261,7 @@ def claim_task(loop_id: str) -> Optional[dict[str, Any]]:
         "priority": row[3],
         "parent_id": row[4],
         "root_spec_path": row[5],
+        "ir_snippet": row[6],
         "status": "claimed",
         "claimed_at": now,
         "loop_id": loop_id,
