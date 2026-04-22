@@ -1,3 +1,6 @@
+<img width="1024" height="1024" alt="ORCA_LOGO2" src="https://github.com/user-attachments/assets/9b10752e-aad3-4b07-8a6f-ef9838843f2f" />
+
+
 # Orca Orchestrator
 
 A shared task coordination system for multiple autonomous Ralph loops running on the same machine.
