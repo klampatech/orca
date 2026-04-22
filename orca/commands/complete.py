@@ -1,18 +1,35 @@
 """orch complete — Mark a task as successfully completed."""
 
+from __future__ import annotations
+
+import sqlite3
+import warnings
 from pathlib import Path
 
 import shutil
 import subprocess as _subprocess
 
+# Detect SQLite version at module load time
+_SQLITE_SUPPORTS_RETURNING = sqlite3.sqlite_version_info >= (3, 35, 0)
+
+if not _SQLITE_SUPPORTS_RETURNING:
+    warnings.warn(
+        f"SQLite {sqlite3.sqlite_version} does not support RETURNING clause "
+        "(requires ≥ 3.35.0). Atomic last-child detection is degraded — "
+        "two children completing simultaneously may both trigger validation. "
+        "Upgrade SQLite for correct behavior.",
+        UserWarning,
+        stacklevel=2,
+    )
+
 
 def _verify_task_complete() -> tuple[bool, str]:
     """Run validation tests before completing. Returns (verified, output).
-    
+
     Detects project type and runs appropriate test command.
     """
     cwd = Path.cwd()
-    
+
     # Detect Node.js project
     if (cwd / "package.json").exists():
         result = _subprocess.run(
@@ -24,7 +41,7 @@ def _verify_task_complete() -> tuple[bool, str]:
         verified = result.returncode == 0
         output = result.stdout[:3000] if result.stdout else result.stderr[:3000]
         return verified, output
-    
+
     # Detect Python project
     if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists() or (cwd / "requirements.txt").exists():
         python_cmd = shutil.which("python3") or shutil.which("python")
@@ -37,7 +54,7 @@ def _verify_task_complete() -> tuple[bool, str]:
         verified = result.returncode == 0
         output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
         return verified, output
-    
+
     # Detect Go project
     if (cwd / "go.mod").exists():
         result = _subprocess.run(
@@ -49,7 +66,7 @@ def _verify_task_complete() -> tuple[bool, str]:
         verified = result.returncode == 0
         output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
         return verified, output
-    
+
     # Detect Ruby project
     if (cwd / "Gemfile").exists():
         result = _subprocess.run(
@@ -61,7 +78,7 @@ def _verify_task_complete() -> tuple[bool, str]:
         verified = result.returncode == 0
         output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
         return verified, output
-    
+
     # No known project type
     return True, "No test runner detected — skipping verification"
 
@@ -73,8 +90,6 @@ def handle_complete(args) -> dict:
         args.task_id: ID of the task to mark complete.
         args.loop_id: Loop ID (optional, resolved automatically).
         args.result: Optional result summary.
-        args.verify: If True, run tests before marking complete.
-                     Defaults to True (tests must pass).
         args.no_verify: If True, skip test verification.
 
     Returns:
@@ -87,17 +102,13 @@ def handle_complete(args) -> dict:
     from ..models.task_run import complete_task_run
     from ..models.task import update_task_status
 
-    # Run verification by default (tests must pass to complete)
-    # Use --no-verify to skip verification
     run_verification = not getattr(args, "no_verify", False)
 
     if run_verification:
         print(f"[complete] Running validation tests for task {args.task_id}...")
         verified, output = _verify_task_complete()
         if not verified:
-            # Return task to available pool so it can be re-claimed
             update_task_status(args.task_id, "available", result_summary="Tests failed - returned to pool")
-            # Complete the task run record with failure status
             complete_task_run(args.task_id, loop_id, exit_status=1, result_summary="Tests failed")
             return {
                 "command": "complete",
@@ -112,9 +123,6 @@ def handle_complete(args) -> dict:
     complete_task_run(args.task_id, loop_id, exit_status=0, result_summary=args.result)
     update_task_status(args.task_id, "completed", result_summary=args.result)
 
-    # --- Phase 2: hidden scenario validation trigger ---
-    # Check if this was the last child of a feature root.
-    # If yes, atomically lock the feature tree and trigger validation.
     _trigger_feature_validation_if_complete(args.task_id, loop_id)
 
     return {
@@ -129,28 +137,55 @@ def handle_complete(args) -> dict:
 def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
     """Check if task was last child of a feature root; if so, trigger HSV.
 
-    Uses atomic SQL to detect "is this the last incomplete child?" and
-    promote the root to 'validation' in one shot.
-    This prevents the double-validation race (two children completing simultaneously).
+    Handles three trigger paths:
+    1. Standalone root completes (no children) → trigger HSV on self
+    2. Last child completes → lock tree + trigger validation (first run)
+    3. Root is in 'validation' + all blocked children are 'completed' → re-run validation
     """
+    import argparse
     from ..db.connection import get_connection
+    from .validate_scenarios import handle_validate_scenarios
 
     conn = get_connection()
 
-    # Get parent_id before we touch anything
     row = conn.execute(
-        "SELECT parent_id FROM tasks WHERE id = ?", (task_id,)
+        "SELECT parent_id, status FROM tasks WHERE id = ?", (task_id,)
     ).fetchone()
     if not row:
         return
-    parent_id = row[0]
+    parent_id, task_status = row[0], row[1]
 
-    # No parent → standalone root, not a feature-child completion
-    if parent_id is None:
+    # Case 3: Re-validation after hidden tasks complete.
+    # Task is 'completed' and parent is in 'validation' — check if all done.
+    if parent_id is not None and task_status == "completed":
+        parent_row = conn.execute(
+            "SELECT status FROM tasks WHERE id = ?", (parent_id,)
+        ).fetchone()
+        if parent_row and parent_row[0] == "validation":
+            remaining = conn.execute("""
+                SELECT COUNT(*) FROM tasks
+                WHERE parent_id = ?
+                  AND status NOT IN ('completed', 'blocked')
+            """, (parent_id,)).fetchone()[0]
+            if remaining == 0:
+                handle_validate_scenarios(
+                    argparse.Namespace(feature_id=parent_id, check_all=False, loop_id=loop_id)
+                )
         return
 
-    # Atomic last-child detection + root promotion
-    # Use nested SELECT to ensure consistent parent_id resolution
+    # Case 1: Standalone root (no parent, no children) → validate self directly.
+    if parent_id is None:
+        children = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE parent_id = ?", (task_id,)
+        ).fetchone()[0]
+        if children == 0:
+            _lock_feature_tree_inline(conn, task_id)
+            handle_validate_scenarios(
+                argparse.Namespace(feature_id=task_id, check_all=False, loop_id=loop_id)
+            )
+        return
+
+    # Case 2: Last child completing — promote root to 'validation'.
     try:
         result = conn.execute("""
             WITH remaining AS (
@@ -171,44 +206,46 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
             RETURNING id;
         """, (task_id, task_id, task_id)).fetchone()
     except Exception:
-        # SQLite version < 3.35.0 doesn't support RETURNING
-        # Fall back to two-query approach (with race condition window)
+        if not _SQLITE_SUPPORTS_RETURNING:
+            warnings.warn(
+                f"SQLite {sqlite3.sqlite_version} does not support RETURNING. "
+                "Degraded atomic last-child detection.",
+                UserWarning,
+                stacklevel=2,
+            )
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
+        row_inner = conn.execute(
             "SELECT parent_id FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
-        if not row or row[0] is None:
+        if not row_inner or row_inner[0] is None:
             conn.rollback()
             return
 
-        parent_id = row[0]
-
-        # Check if any remaining incomplete siblings
+        parent_id_inner = row_inner[0]
         remaining = conn.execute("""
             SELECT COUNT(*) FROM tasks
             WHERE parent_id = ?
               AND status != 'completed'
               AND id != ?
-        """, (parent_id, task_id)).fetchone()[0]
+        """, (parent_id_inner, task_id)).fetchone()[0]
 
         if remaining == 0:
-            # Last child — promote root to validation
             conn.execute(
                 "UPDATE tasks SET status='validation' WHERE id=? AND status IN ('available', 'claimed')",
-                (parent_id,)
+                (parent_id_inner,)
             )
             conn.commit()
         else:
             conn.rollback()
             return
-        result = (parent_id,)
+        result = (parent_id_inner,)
 
     if not result:
-        return  # Not the last child, nothing to do
+        return
 
     root_id = result[0]
 
-    # Mark all descendants as 'blocked'
+    # Lock descendants as 'blocked'
     conn.execute("BEGIN IMMEDIATE")
     conn.execute("""
         WITH RECURSIVE descendants AS (
@@ -221,11 +258,16 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
     """, (root_id,))
     conn.commit()
 
-    # Trigger HSV (non-blocking — runs synchronously after 'orca complete' returns)
-    from .validate_scenarios import handle_validate_scenarios
-    import argparse
-    validate_result = handle_validate_scenarios(
-        argparse.Namespace(feature_id=root_id, check_all=False)
+    handle_validate_scenarios(
+        argparse.Namespace(feature_id=root_id, check_all=False, loop_id=loop_id)
+    )
+
+
+def _lock_feature_tree_inline(conn, root_id: str) -> None:
+    """Lock a feature tree inline within an existing transaction."""
+    conn.execute(
+        "UPDATE tasks SET status='validation' WHERE id=?",
+        (root_id,)
     )
 
 

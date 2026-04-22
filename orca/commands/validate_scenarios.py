@@ -15,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import time as _time
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -32,6 +33,7 @@ def handle_validate_scenarios(args) -> dict:
     _validate_single_feature (for one feature) or _validate_all_complete_features
     (for --check-all).
     """
+    loop_id = getattr(args, "loop_id", None)
     check_all = getattr(args, "check_all", False)
     if check_all:
         return _validate_all_complete_features()
@@ -39,11 +41,13 @@ def handle_validate_scenarios(args) -> dict:
     feature_id = args.feature_id
     if not feature_id:
         raise ValueError("feature_id is required unless --check-all is set")
-    return _validate_single_feature(feature_id)
+    return _validate_single_feature(feature_id, loop_id=loop_id)
 
 
-def _validate_single_feature(feature_id: str) -> dict:
+def _validate_single_feature(feature_id: str, *, loop_id: str | None = None) -> dict:
     """Validate one feature."""
+    start = _time.monotonic()
+
     # Get spec path and code paths
     spec_path = get_root_spec_path(feature_id)
     code_paths = get_feature_code_paths(feature_id)
@@ -73,15 +77,16 @@ def _validate_single_feature(feature_id: str) -> dict:
 
     if not test_dir.exists():
         # No scenarios generated — pass
+        duration_ms = int((_time.monotonic() - start) * 1000)
         unlock_tree(feature_id)
         _record_hsv_run(
             feature_id=feature_id,
-            loop_id=None,
+            loop_id=loop_id,
             scenarios_found=0,
             passed=0,
             failed=0,
             errors=0,
-            duration_ms=0,
+            duration_ms=duration_ms,
             output=pi_output,
         )
         return _build_result(feature_id, [], [], [])
@@ -97,17 +102,17 @@ def _validate_single_feature(feature_id: str) -> dict:
     except FileNotFoundError:
         # pytest not installed - skip test execution
         print("[validate-scenarios] pytest not found - skipping test execution")
+        duration_ms = int((_time.monotonic() - start) * 1000)
         result = None
         passed, failed, errors = [], [], []
-        # All scenarios are considered "passed" since we can't run tests
         _record_hsv_run(
             feature_id=feature_id,
-            loop_id=None,
+            loop_id=loop_id,
             scenarios_found=0,
             passed=0,
             failed=0,
             errors=0,
-            duration_ms=0,
+            duration_ms=duration_ms,
             output="pytest not installed - validation skipped",
         )
         unlock_tree(feature_id)
@@ -115,25 +120,24 @@ def _validate_single_feature(feature_id: str) -> dict:
 
     # Parse results
     passed, failed, errors = _parse_pytest_output(result.stdout + result.stderr)
+    duration_ms = int((_time.monotonic() - start) * 1000)
 
     # Record this HSV run
     _record_hsv_run(
         feature_id=feature_id,
-        loop_id=None,
+        loop_id=loop_id,
         scenarios_found=len(passed) + len(failed) + len(errors),
         passed=len(passed),
         failed=len(failed),
         errors=len(errors),
-        duration_ms=0,
+        duration_ms=duration_ms,
         output=(result.stdout + result.stderr)[:5000],
     )
 
     if not failed and not errors:
-        # All pass: unlock tree
         print(f"[validate-scenarios] All {len(passed)} scenarios passed")
         unlock_tree(feature_id)
     else:
-        # Some fail: create hidden tasks
         print(f"[validate-scenarios] {len(failed)} failed, {len(errors)} errors — creating hidden tasks")
         create_hidden_tasks(feature_id, [r.scenario_id for r in failed])
 
@@ -141,16 +145,9 @@ def _validate_single_feature(feature_id: str) -> dict:
 
 
 def _build_hsv_prompt(spec_path: Path, code_paths: list[Path], feature_id: str) -> str:
-    """Build the pi prompt for hidden scenario generation.
-
-    Args:
-        spec_path: Path to spec.ir.json for this feature's root spec.
-        code_paths: List of paths to code files belonging to this feature.
-        feature_id: The feature root task ID (used to construct output path).
-    """
+    """Build the pi prompt for hidden scenario generation."""
     encoded_feature_id = urllib.parse.quote(feature_id)
     output_dir = f".orch/hidden_scenarios/{encoded_feature_id}"
-    output_path = f"{output_dir}/test_hidden_{{N}}.py"
 
     code_paths_str = "\n- ".join(str(p) for p in code_paths[:20])  # Limit to 20 files
 
@@ -186,12 +183,7 @@ Focus on:
 
 
 def _parse_pytest_output(output: str) -> tuple[list, list, list]:
-    """Parse pytest output into passed/failed/error lists.
-
-    Each entry is a _ScenarioResult with:
-      - file_path: full pytest line (e.g. "test_hidden_1.py::test_unicode_email PASSED")
-      - scenario_id: extracted file stem (e.g. "test_hidden_1")
-    """
+    """Parse pytest output into passed/failed/error lists."""
     passed, failed, errors = [], [], []
     for line in output.splitlines():
         if " PASSED" in line:
@@ -206,8 +198,8 @@ def _parse_pytest_output(output: str) -> tuple[list, list, list]:
 class _ScenarioResult:
     """Holds a parsed pytest result line with extracted scenario ID."""
     def __init__(self, file_path: str, scenario_id: str):
-        self.file_path = file_path  # full pytest line
-        self.scenario_id = scenario_id  # e.g. "test_hidden_1"
+        self.file_path = file_path
+        self.scenario_id = scenario_id
 
     @staticmethod
     def from_pytest_line(line: str) -> "_ScenarioResult":
@@ -222,7 +214,6 @@ def _validate_all_complete_features() -> dict:
     results = []
     conn = get_connection()
 
-    # Find feature roots where all children are completed (and not already in validation/completed)
     roots = conn.execute("""
         SELECT id FROM tasks
         WHERE parent_id IS NULL
@@ -293,11 +284,7 @@ def _record_hsv_run(
 
 
 def get_root_spec_path(feature_id: str) -> Path:
-    """Resolve the spec.ir.json path for a feature root.
-
-    The feature root task stores its spec path in tasks.root_spec_path.
-    The IR file lives alongside that spec file as spec.ir.json.
-    """
+    """Resolve the spec.ir.json path for a feature root."""
     conn = get_connection()
     row = conn.execute(
         "SELECT root_spec_path FROM tasks WHERE id = ?", (feature_id,)
@@ -312,30 +299,17 @@ def get_root_spec_path(feature_id: str) -> Path:
 
 
 def get_feature_code_paths(feature_id: str) -> list[Path]:
-    """Find all code files belonging to a feature.
-
-    Scans the project directory for code in paths referenced by the feature's
-    IR spec. Falls back to a heuristic: all files under the spec's directory
-    that have extensions in {py, js, ts, go, rb}.
-
-    Returns:
-        List of Path objects pointing to code files.
-    """
+    """Find all code files belonging to a feature."""
     import os
     from pathlib import Path
 
-    # Get the spec directory
     spec_path = get_root_spec_path(feature_id)
     spec_dir = spec_path.parent
-
-    # If spec.ir.json is in a project subdirectory (e.g. src/features/login/),
-    # scan that directory. Otherwise scan the parent of the spec directory.
     scan_root = spec_dir
 
     CODE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".go", ".rb", ".java", ".rs"}
     code_files = []
     for root, dirs, files in os.walk(scan_root):
-        # Skip hidden, build, and dependency directories
         dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
             "node_modules", "__pycache__", "venv", "vendor", "target", "dist", "build"
         )]
@@ -347,21 +321,15 @@ def get_feature_code_paths(feature_id: str) -> list[Path]:
 
 
 def lock_feature_tree(root_id: str) -> None:
-    """Atomically lock a feature tree for validation.
-
-    Sets the root to 'validation' and all descendants to 'blocked'.
-    Called when validation is triggered.
-    """
+    """Atomically lock a feature tree for validation."""
     conn = get_connection()
     conn.execute("BEGIN IMMEDIATE")
 
-    # Mark root as 'validation' (blocking state)
     conn.execute(
         "UPDATE tasks SET status='validation' WHERE id=?",
         (root_id,)
     )
 
-    # Mark all descendants as 'blocked' (cannot be claimed)
     conn.execute("""
         WITH RECURSIVE descendants AS (
             SELECT id FROM tasks WHERE parent_id = ?
@@ -376,21 +344,15 @@ def lock_feature_tree(root_id: str) -> None:
 
 
 def unlock_tree(root_id: str) -> None:
-    """Atomically unlock a feature tree after validation.
-
-    Sets the root to 'completed' and releases all blocked descendants
-    back to 'available' so they can be claimed again.
-    """
+    """Atomically unlock a feature tree after validation."""
     conn = get_connection()
     conn.execute("BEGIN IMMEDIATE")
 
-    # Mark root completed
     conn.execute(
         "UPDATE tasks SET status='completed' WHERE id=? AND status='validation'",
         (root_id,)
     )
 
-    # Release all blocked descendants
     conn.execute("""
         WITH RECURSIVE descendants AS (
             SELECT id FROM tasks WHERE parent_id = ?
@@ -406,33 +368,17 @@ def unlock_tree(root_id: str) -> None:
 
 
 def create_hidden_tasks(feature_id: str, failed_scenarios: list[str]) -> None:
-    """Create hidden scenario tasks for each failed pytest scenario.
-
-    Each hidden task is created as a child of the feature root with status
-    'blocked'. Priority is assigned based on scenario type:
-      - Security/correctness gaps → P9
-      - Quality/edge-case gaps   → P6
-
-    Args:
-        feature_id: The feature root task ID.
-        failed_scenarios: List of scenario IDs (from _ScenarioResult.scenario_id)
-                          that failed pytest.
-    """
+    """Create hidden scenario tasks for each failed pytest scenario."""
     conn = get_connection()
 
     for scenario_id in failed_scenarios:
-        # scenario_id is the test file stem, e.g. "test_hidden_1"
-        # The description should reference the scenario_id so it is traceable
-        # back to the pytest output. In production, store the full docstring
-        # from the generated test in ir_snippet for the loop to read.
         task = create_task(
             description=f"[hidden scenario] {scenario_id}",
-            priority=9,  # default to P9; override per-type below if available
+            priority=9,
             parent_id=feature_id,
             root_spec_path=None,
             ir_snippet=json.dumps({"type": "hidden_scenario", "scenario_id": scenario_id}),
         )
-        # Immediately set to blocked (create_task defaults to 'available')
         conn.execute(
             "UPDATE tasks SET status='blocked' WHERE id=?",
             (task["id"],)
@@ -441,10 +387,7 @@ def create_hidden_tasks(feature_id: str, failed_scenarios: list[str]) -> None:
 
 
 def format_validate_scenarios_human(result: dict) -> str:
-    """Format the validate-scenarios result for human display.
-
-    Registered in COMMANDS alongside handle_validate_scenarios.
-    """
+    """Format the validate-scenarios result for human display."""
     feature_id = result.get("feature_id", "?")
     status = result.get("status", "?")
 

@@ -122,6 +122,18 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("feature_id", nargs="?", help="Feature root task ID")
     validate.add_argument("--check-all", action="store_true", help="Validate all complete features")
 
+    # metrics
+    metrics = sub.add_parser("metrics", help="Show throughput and duration metrics")
+    metrics.add_argument("spec", nargs="?", help="Filter metrics to a specific spec")
+
+    # serve
+    serve = sub.add_parser("serve", help="Start HTTP API server")
+    serve.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")
+    serve.add_argument("--port", type=int, default=8080, help="HTTP port (default: 8080)")
+
+    # migrate
+    sub.add_parser("migrate", help="Apply pending database migrations")
+
     return parser
 
 

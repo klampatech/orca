@@ -13,6 +13,9 @@ from .log import format_log_human, handle_log
 from .loop import format_loop_human, format_loops_human, handle_loop, handle_loops
 from .reclaim import format_reclaim_human, handle_reclaim
 from .refine import format_refine_human, handle_refine
+from .metrics import format_metrics_human, handle_metrics
+from .migrate import format_migrate_human, handle_migrate
+from .serve import format_serve_human, handle_serve
 from .status import format_status_human, handle_status
 from .validate_scenarios import format_validate_scenarios_human, handle_validate_scenarios
 
@@ -33,4 +36,7 @@ COMMANDS = {
     "loop": (handle_loop, format_loop_human),
     "loops": (handle_loops, format_loops_human),
     "validate-scenarios": (handle_validate_scenarios, format_validate_scenarios_human),
+    "metrics": (handle_metrics, format_metrics_human),
+    "migrate": (handle_migrate, format_migrate_human),
+    "serve": (handle_serve, format_serve_human),
 }

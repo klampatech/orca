@@ -56,10 +56,19 @@ CREATE TABLE IF NOT EXISTS hidden_scenario_runs (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_avail ON tasks(priority DESC, created_at ASC) WHERE status = 'available';
+-- idx_tasks_claimable: fast claim excluding children of validation roots
+CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks(priority DESC, created_at ASC)
+    WHERE status = 'available'
+      AND (parent_id IS NULL
+           OR parent_id NOT IN (SELECT id FROM tasks WHERE status = 'validation'));
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_expire ON task_runs(heartbeat_at) WHERE completed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hsr_feature ON hidden_scenario_runs(feature_id);
 CREATE INDEX IF NOT EXISTS idx_hsr_generated ON hidden_scenario_runs(generated_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks(priority DESC, created_at ASC)
+    WHERE status = 'available'
+      AND (parent_id IS NULL
+           OR parent_id NOT IN (SELECT id FROM tasks WHERE status = 'validation'));
 """
 
 HEARTBEAT_TIMEOUT_SECONDS = 300  # 5 minutes to handle long-running tasks
