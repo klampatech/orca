@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     parent_id       TEXT REFERENCES tasks(id),
     root_spec_path  TEXT,
     ir_snippet      TEXT,  -- JSON IR section for this task (Phase 1 IR validator)
-    CHECK (status IN ('available', 'claimed', 'completed', 'failed'))
+    CHECK (status IN ('available', 'claimed', 'completed', 'failed',
+                      'validation', 'blocked'))  -- Phase 2: validation, blocked
 );
 
 CREATE TABLE IF NOT EXISTS task_runs (
@@ -40,10 +41,25 @@ CREATE TABLE IF NOT EXISTS loops (
     current_task_id TEXT REFERENCES tasks(id)
 );
 
+CREATE TABLE IF NOT EXISTS hidden_scenario_runs (
+    id                  TEXT PRIMARY KEY,
+    feature_id          TEXT NOT NULL REFERENCES tasks(id),
+    loop_id             TEXT,
+    generated_at        TEXT NOT NULL DEFAULT (datetime(utcnow())),
+    scenarios_found     INTEGER NOT NULL DEFAULT 0,
+    scenarios_passed    INTEGER NOT NULL DEFAULT 0,
+    scenarios_failed    INTEGER NOT NULL DEFAULT 0,
+    scenarios_errored   INTEGER NOT NULL DEFAULT 0,
+    duration_ms         INTEGER,
+    output_snippet      TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_avail ON tasks(priority DESC, created_at ASC) WHERE status = 'available';
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_expire ON task_runs(heartbeat_at) WHERE completed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_hsr_feature ON hidden_scenario_runs(feature_id);
+CREATE INDEX IF NOT EXISTS idx_hsr_generated ON hidden_scenario_runs(generated_at);
 """
 
 HEARTBEAT_TIMEOUT_SECONDS = 300  # 5 minutes to handle long-running tasks

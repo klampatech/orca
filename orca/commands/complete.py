@@ -90,7 +90,7 @@ def handle_complete(args) -> dict:
     # Run verification by default (tests must pass to complete)
     # Use --no-verify to skip verification
     run_verification = not getattr(args, "no_verify", False)
-    
+
     if run_verification:
         print(f"[complete] Running validation tests for task {args.task_id}...")
         verified, output = _verify_task_complete()
@@ -112,6 +112,11 @@ def handle_complete(args) -> dict:
     complete_task_run(args.task_id, loop_id, exit_status=0, result_summary=args.result)
     update_task_status(args.task_id, "completed", result_summary=args.result)
 
+    # --- Phase 2: hidden scenario validation trigger ---
+    # Check if this was the last child of a feature root.
+    # If yes, atomically lock the feature tree and trigger validation.
+    _trigger_feature_validation_if_complete(args.task_id, loop_id)
+
     return {
         "command": "complete",
         "status": "success",
@@ -119,6 +124,109 @@ def handle_complete(args) -> dict:
         "loop_id": loop_id,
         "result": args.result,
     }
+
+
+def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
+    """Check if task was last child of a feature root; if so, trigger HSV.
+
+    Uses atomic SQL to detect "is this the last incomplete child?" and
+    promote the root to 'validation' in one shot.
+    This prevents the double-validation race (two children completing simultaneously).
+    """
+    from ..db.connection import get_connection
+
+    conn = get_connection()
+
+    # Get parent_id before we touch anything
+    row = conn.execute(
+        "SELECT parent_id FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if not row:
+        return
+    parent_id = row[0]
+
+    # No parent → standalone root, not a feature-child completion
+    if parent_id is None:
+        return
+
+    # Atomic last-child detection + root promotion
+    # Use nested SELECT to ensure consistent parent_id resolution
+    try:
+        result = conn.execute("""
+            WITH remaining AS (
+                SELECT COUNT(*) as cnt FROM tasks
+                WHERE parent_id = (
+                    SELECT parent_id FROM tasks WHERE id = ?
+                )
+                  AND status != 'completed'
+                  AND id != ?
+            )
+            UPDATE tasks
+            SET status = 'validation'
+            WHERE id = (
+                SELECT parent_id FROM tasks WHERE id = ?
+            )
+              AND (SELECT cnt FROM remaining) = 0
+              AND status IN ('available', 'claimed')
+            RETURNING id;
+        """, (task_id, task_id, task_id)).fetchone()
+    except Exception:
+        # SQLite version < 3.35.0 doesn't support RETURNING
+        # Fall back to two-query approach (with race condition window)
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT parent_id FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if not row or row[0] is None:
+            conn.rollback()
+            return
+
+        parent_id = row[0]
+
+        # Check if any remaining incomplete siblings
+        remaining = conn.execute("""
+            SELECT COUNT(*) FROM tasks
+            WHERE parent_id = ?
+              AND status != 'completed'
+              AND id != ?
+        """, (parent_id, task_id)).fetchone()[0]
+
+        if remaining == 0:
+            # Last child — promote root to validation
+            conn.execute(
+                "UPDATE tasks SET status='validation' WHERE id=? AND status IN ('available', 'claimed')",
+                (parent_id,)
+            )
+            conn.commit()
+        else:
+            conn.rollback()
+            return
+        result = (parent_id,)
+
+    if not result:
+        return  # Not the last child, nothing to do
+
+    root_id = result[0]
+
+    # Mark all descendants as 'blocked'
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("""
+        WITH RECURSIVE descendants AS (
+            SELECT id FROM tasks WHERE parent_id = ?
+            UNION ALL
+            SELECT t.id FROM tasks t JOIN descendants d ON t.parent_id = d.id
+        )
+        UPDATE tasks SET status='blocked'
+        WHERE id IN (SELECT id FROM descendants)
+    """, (root_id,))
+    conn.commit()
+
+    # Trigger HSV (non-blocking — runs synchronously after 'orca complete' returns)
+    from .validate_scenarios import handle_validate_scenarios
+    import argparse
+    validate_result = handle_validate_scenarios(
+        argparse.Namespace(feature_id=root_id, check_all=False)
+    )
 
 
 def format_complete_human(result: dict) -> str:

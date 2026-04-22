@@ -220,11 +220,15 @@ def claim_task(loop_id: str) -> Optional[dict[str, Any]]:
     conn.execute("BEGIN IMMEDIATE")
     reclaim_stale_task_runs(conn)
 
+    # Exclude children of validation roots (Phase 2)
+    # Only claim tasks where parent is NOT a validation-root
     row = conn.execute(
         """
         SELECT id, spec_path, description, priority, parent_id, root_spec_path, ir_snippet
         FROM tasks
         WHERE status = 'available'
+          AND (parent_id IS NULL
+               OR parent_id NOT IN (SELECT id FROM tasks WHERE status = 'validation'))
         ORDER BY priority DESC, created_at ASC
         LIMIT 1
         """,

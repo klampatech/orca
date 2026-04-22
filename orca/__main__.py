@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     lst = sub.add_parser("list", help="List tasks (optionally filtered)")
     lst.add_argument(
         "--status",
-        choices=["available", "claimed", "completed", "failed"],
+        choices=["available", "claimed", "completed", "failed", "validation", "blocked"],
         help="Filter by status",
     )
 
@@ -116,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
     loops = sub.add_parser("loops", help="Spawn multiple Ralph loops")
     loops.add_argument("n", type=int, help="Number of loops to spawn")
     loops.add_argument("--claim-only", action="store_true", help="Claim one task per loop and exit immediately")
+
+    # validate-scenarios
+    validate = sub.add_parser("validate-scenarios", help="Run hidden scenario validation for a feature")
+    validate.add_argument("feature_id", nargs="?", help="Feature root task ID")
+    validate.add_argument("--check-all", action="store_true", help="Validate all complete features")
 
     return parser
 

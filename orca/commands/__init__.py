@@ -14,6 +14,7 @@ from .loop import format_loop_human, format_loops_human, handle_loop, handle_loo
 from .reclaim import format_reclaim_human, handle_reclaim
 from .refine import format_refine_human, handle_refine
 from .status import format_status_human, handle_status
+from .validate_scenarios import format_validate_scenarios_human, handle_validate_scenarios
 
 COMMANDS = {
     "init": (handle_init, format_init_human),
@@ -31,4 +32,5 @@ COMMANDS = {
     "info": (handle_info, format_info_human),
     "loop": (handle_loop, format_loop_human),
     "loops": (handle_loops, format_loops_human),
+    "validate-scenarios": (handle_validate_scenarios, format_validate_scenarios_human),
 }
