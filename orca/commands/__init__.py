@@ -1,5 +1,7 @@
 """CLI commands for the Ralph Loop Orchestrator."""
 
+from typing import Callable
+
 from .add import format_add_human, handle_add
 from .claim import format_claim_human, handle_claim
 from .complete import format_complete_human, handle_complete
@@ -11,15 +13,24 @@ from .init import format_init_human, handle_init
 from .list import format_list_human, handle_list
 from .log import format_log_human, handle_log
 from .loop import format_loop_human, format_loops_human, handle_loop, handle_loops
+from .plan import format_plan_human, handle_plan
 from .reclaim import format_reclaim_human, handle_reclaim
 from .refine import format_refine_human, handle_refine
+from .audit import format_audit_human, handle_audit
 from .metrics import format_metrics_human, handle_metrics
 from .migrate import format_migrate_human, handle_migrate
 from .serve import format_serve_human, handle_serve
 from .status import format_status_human, handle_status
-from .validate_scenarios import format_validate_scenarios_human, handle_validate_scenarios
+from .validate_scenarios import (
+    format_validate_scenarios_human,
+    handle_validate_scenarios,
+)
 
-COMMANDS = {
+# Type aliases for command handlers
+Handler = Callable[..., dict]
+Formatter = Callable[[dict], str]
+
+COMMANDS: dict[str, tuple[Handler, Formatter]] = {
     "init": (handle_init, format_init_human),
     "add": (handle_add, format_add_human),
     "claim": (handle_claim, format_claim_human),
@@ -28,6 +39,7 @@ COMMANDS = {
     "fail": (handle_fail, format_fail_human),
     "decompose": (handle_decompose, format_decompose_human),
     "refine": (handle_refine, format_refine_human),
+    "audit": (handle_audit, format_audit_human),
     "status": (handle_status, format_status_human),
     "list": (handle_list, format_list_human),
     "reclaim": (handle_reclaim, format_reclaim_human),
@@ -35,6 +47,7 @@ COMMANDS = {
     "info": (handle_info, format_info_human),
     "loop": (handle_loop, format_loop_human),
     "loops": (handle_loops, format_loops_human),
+    "plan": (handle_plan, format_plan_human),
     "validate-scenarios": (handle_validate_scenarios, format_validate_scenarios_human),
     "metrics": (handle_metrics, format_metrics_human),
     "migrate": (handle_migrate, format_migrate_human),

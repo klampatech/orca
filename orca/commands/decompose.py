@@ -1,6 +1,7 @@
 """orch decompose — Break a spec into claimable tasks.
 
-Supports dual input modes:
+Supports three input modes:
+- Plan format (.md with TASK-NNN): Parse implementation plan
 - Gherkin markdown (.md): Existing TDD parsing logic
 - JSON IR (.json): Phase 1 IR validator spec.ir.json decomposition
 
@@ -22,6 +23,7 @@ from ..db.connection import get_orch_dir
 from ..models.task import create_tasks_batch
 from ..utils.validator import SpecIRValidator
 from ..utils.logging import log_decompose_start, log_decompose_complete
+from ..plan.parser import is_plan_format, parse_plan_content, generate_tasks_from_plan
 
 
 # --------------------------------------------------------------------
@@ -312,10 +314,10 @@ def _parse_ir_decompose(spec_path: Path) -> tuple[list[dict], list[tuple[int, in
 
 
 def handle_decompose(args) -> dict:
-    """Decompose a spec (markdown TDD or JSON IR) into tasks.
+    """Decompose a spec (plan, markdown TDD, or JSON IR) into tasks.
 
     Args:
-        args.spec: Path to spec file (.md for Gherkin, .json for IR).
+        args.spec: Path to spec file (.md for Gherkin/plan, .json for IR).
         args.description: Optional override description for the spec-root task.
         args.priority: Base priority for generated tasks.
         args.dry_run: If True, don't persist to database.
@@ -341,13 +343,41 @@ def handle_decompose(args) -> dict:
     shutil.copy(spec_path, dest)
     stored_spec_path = str(dest)
 
-    # Detect mode by file extension
+    # Read content once for mode detection
+    content = spec_path.read_text()
+
+    # Detect mode by file extension and content
     mode = "ir" if spec_path.suffix.lower() == ".json" else "gherkin"
 
-    # Log decomposition start
-    log_decompose_start(str(spec_path), mode)
+    # Check if it's a plan format (even for .md files)
+    if mode == "gherkin" and is_plan_format(spec_path):
+        mode = "plan"
 
-    if spec_path.suffix.lower() == ".json":
+    # Handle plan format
+    if mode == "plan":
+        # Parse plan and generate tasks
+        plan = parse_plan_content(content)
+        tasks_to_create = generate_tasks_from_plan(plan)
+
+        # Use project name for feature title
+        feature_title = args.description or plan.metadata.project or spec_path.stem
+
+        # For plan mode, add a root task that represents the full plan
+        root_task = {
+            "description": feature_title,
+            "spec_path": stored_spec_path,
+            "priority": max(args.priority, 10),
+            "parent_id": None,
+            "root_spec_path": stored_spec_path,
+            "ir_snippet": None,  # Plan doesn't use ir_snippet
+        }
+        tasks_to_create.insert(0, root_task)
+
+        # Log decomposition
+        log_decompose_start(str(spec_path), mode)
+        feature_blocks = None
+
+    elif mode == "ir":
         # IR mode: validate JSON IR first
         validator = SpecIRValidator()
         valid, errors = validator.validate_file(spec_path)
@@ -375,9 +405,11 @@ def handle_decompose(args) -> dict:
 
         feature_title = args.description or project_name
 
+        # Log decomposition
+        log_decompose_start(str(spec_path), mode)
+
     else:
         # Gherkin markdown mode (existing behavior)
-        content = spec_path.read_text()
         scenarios = _parse_scenarios(content)
 
         if not scenarios:
@@ -423,6 +455,9 @@ def handle_decompose(args) -> dict:
 
         feature_blocks = None  # Not used for Gherkin mode
 
+        # Log decomposition
+        log_decompose_start(str(spec_path), mode)
+
     if args.dry_run:
         # Return tasks without persisting (IDs will be None)
         for task in tasks_to_create:
@@ -437,7 +472,7 @@ def handle_decompose(args) -> dict:
 
         conn = get_connection()
 
-        if spec_path.suffix.lower() == ".json":
+        if mode == "ir":
             # IR mode: link children to their feature root using block boundaries
             # feature_blocks contains (start, end) for each feature's block
             for start_idx, end_idx in feature_blocks or []:
@@ -448,6 +483,28 @@ def handle_decompose(args) -> dict:
                     conn.execute(
                         "UPDATE tasks SET parent_id = ? WHERE id = ?",
                         (root_id, result_tasks[i]["id"]),
+                    )
+        elif mode == "plan":
+            # Plan mode: link feature root to spec root
+            spec_root_id = result_tasks[0]["id"]
+            current_feature_root = None
+
+            for i, task in enumerate(result_tasks[1:], start=1):
+                # Check if this is a feature root (ir_snippet contains feature id)
+                ir_snippet = task.get("ir_snippet", "")
+                if ir_snippet and '"id": "FEAT-' in ir_snippet:
+                    current_feature_root = task["id"]
+                    task["parent_id"] = spec_root_id
+                    conn.execute(
+                        "UPDATE tasks SET parent_id = ? WHERE id = ?",
+                        (spec_root_id, task["id"]),
+                    )
+                elif current_feature_root:
+                    # This is a task under a feature
+                    task["parent_id"] = current_feature_root
+                    conn.execute(
+                        "UPDATE tasks SET parent_id = ? WHERE id = ?",
+                        (current_feature_root, task["id"]),
                     )
         else:
             # Gherkin mode: link all sub-tasks to root
@@ -475,7 +532,8 @@ def handle_decompose(args) -> dict:
     return {
         "command": "decompose",
         "status": "success",
-        "mode": mode,
+        "mode": mode
+,
         "spec_root_id": result_tasks[0]["id"],
         "spec_path": stored_spec_path,
         "total_tasks": len(result_tasks),
@@ -485,7 +543,7 @@ def handle_decompose(args) -> dict:
 
 def format_decompose_human(result: dict) -> str:
     mode = result.get("mode", "gherkin")
-    mode_str = "IR" if mode == "ir" else "Gherkin"
+    mode_str = "Plan" if mode == "plan" else "IR" if mode == "ir" else "Gherkin"
 
     lines = [
         f"Decomposed {mode_str} spec into {result['total_tasks']} tasks:",

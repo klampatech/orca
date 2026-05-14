@@ -34,7 +34,7 @@ For `orca loop` to run validation tests, install one of:
 | Go | `go test` (standard Go toolchain) |
 | Ruby | `rspec` (`bundle install`) |
 
-**Orca itself has zero external Python dependencies** — it only uses the Python standard library.
+**Orca has zero runtime dependencies** — it only uses the Python standard library. Development tools (ruff, mypy, pytest) are optional dev dependencies.
 
 ## Installation
 
@@ -49,6 +49,25 @@ pip install /path/to/orca
 
 # For development (editable install)
 pip install -e /path/to/orca
+```
+
+### Development Dependencies
+
+For active development, install with dev dependencies:
+
+```bash
+# Install all development tools
+pip install -e ".[dev]"
+
+# Run quality checks
+ruff check orca/           # Linting
+ruff format orca/           # Auto-format code
+mypy orca/                 # Type checking
+
+# Run tests
+pytest tests/              # All tests
+pytest tests/unit/         # Unit tests only
+pytest tests/integration/  # Integration tests only
 ```
 
 ### Post-installation setup
@@ -102,26 +121,22 @@ This creates a `.orch/` directory with `orch.db` (SQLite in WAL mode):
 └── orch.db     # SQLite WAL database — your task backlog
 ```
 
-### 2. Refine a spec into IR format
+### 2. Generate an implementation plan
 
-Convert a raw spec into a validated `spec.ir.json` using the pi agent:
+Convert a raw spec into an actionable implementation plan:
 
 ```bash
-orca refine path/to/spec.md
+orca plan path/to/spec.md
 ```
 
-This generates `path/to/spec.ir.json` with validated feature definitions.
+This generates `IMPLEMENTATION_PLAN.md` with structured tasks in format `- [ ] TASK-NNN:`.
 
-### 3. Decompose the IR into task tree
+### 3. Decompose the plan into task tree
 
-Parse the IR into a hierarchical task tree:
+Parse the plan into a hierarchical task tree:
 
 ```bash
-orca decompose path/to/spec.ir.json
-
-# Or chain directly: refine + decompose
-orca refine path/to/spec.md
-orca decompose path/to/spec.ir.json
+orca decompose path/to/IMPLEMENTATION_PLAN.md
 ```
 
 This creates:
@@ -175,8 +190,8 @@ Results:
 |---------|-------------|
 | `orca init` | Initialize orchestrator in current directory |
 | `orca add <spec> <desc>` | Add task with optional spec path and `--priority N` |
-| `orca refine <spec.md>` | Convert raw spec to validated spec.ir.json using pi |
-| `orca decompose <spec.json> [desc]` | Parse IR into hierarchical task tree |
+| `orca plan <spec.md>` | Generate implementation plan from spec using LLM |
+| `orca decompose <spec.md>` | Parse plan/TDD/IR spec into hierarchical task tree |
 | `orca claim` | Atomically claim the highest-priority available task |
 | `orca heartbeat <task-id>` | Update heartbeat (called every 30s by `orca loop`) |
 | `orca complete <task-id> --result <text>` | Mark task completed (tests verified by default) |
@@ -296,6 +311,48 @@ orca validate-scenarios --check-all
 | Adversarial inputs | Unicode homoglyphs, SQL injection, XSS |
 | Behavioral gaps | File size limits, timeout handling |
 
+## Implementation Plan Format
+
+The `orca plan` command generates plans in a LLM-friendly markdown format:
+
+```markdown
+# Implementation Plan
+
+**Project:** MyProject
+**Spec:** path/to/spec.md
+
+## Features
+
+### FEAT-001: User Authentication
+- [ ] TASK-001: Create user model with email/password fields
+- [ ] TASK-002: Implement password hashing with bcrypt
+- [ ] TASK-003: Add JWT token generation and validation
+
+### FEAT-002: Data Storage
+- [ ] TASK-004: Set up SQLite database connection
+- [ ] TASK-005: Create user table schema
+- [ ] TASK-006: Implement CRUD operations
+
+---
+
+**Plan Hash:** abc123def4
+```
+
+### Plan Generation
+
+Plans are generated iteratively using LLM:
+1. Initial generation from spec content
+2. Stability check via task ID hash
+3. Gap detection between spec and plan
+4. Refinement until hash stable for 2 consecutive iterations
+
+### Plan Decomposition
+
+`orca decompose` detects plan format automatically and creates:
+- **Spec root task** (P10) — represents the full plan
+- **Feature root tasks** (P10) — linked to spec root
+- **Task records** (P8) — linked to their feature root
+
 ## Loop identity
 
 Loops identify themselves with a UUID. Resolution order:
@@ -318,14 +375,22 @@ project-root/
 │   │   └── ...
 │   ├── db/             # Database schema & connection
 │   │   ├── schema.py   # Phase 2: validation/blocked states
-│   │   └── migrations/ # Phase 2: migration scripts
+│   │   └── connection.py
 │   ├── models/         # Data access layer (Task, TaskRun, Loop)
 │   └── utils/          # Identity, time, IR validator utilities
+├── tests/              # Test suite
+│   ├── conftest.py     # Pytest fixtures
+│   ├── unit/           # Unit tests
+│   │   ├── test_utils/
+│   │   └── test_validators/
+│   └── integration/    # Integration tests
 ├── .orch/              # Created by `orca init` — add to .gitignore
 │   ├── orch.db         # SQLite WAL database
 │   ├── hidden_scenarios/  # Phase 2: Generated pytest tests
 │   └── tasks/          # Copied spec files
-├── pyproject.toml      # Package configuration (no external deps!)
+├── pyproject.toml      # Package configuration (dev deps: ruff, mypy, pytest)
+├── ruff.toml           # Ruff linter configuration
+├── mypy.ini           # MyPy type checker configuration
 └── README.md
 ```
 
@@ -441,11 +506,79 @@ Orca outputs minimal info by default. For debugging, pipe to `cat` to see all ou
 orca --json status | jq .
 ```
 
+## Code Quality & Testing
+
+Orca maintains code quality through automated tooling:
+
+### Quality Tools
+
+| Tool | Purpose | Config |
+|------|---------|--------|
+| [Ruff](https://docs.astral.sh/ruff/) | Linting + formatting | `ruff.toml`, `[tool.ruff]` in pyproject.toml |
+| [MyPy](https://mypy.readthedocs.io/) | Type checking | `mypy.ini`, `[tool.mypy]` in pyproject.toml |
+| [Pytest](https://docs.pytest.org/) | Testing | `[tool.pytest.ini_options]` in pyproject.toml |
+
+### Running Checks
+
+```bash
+# All checks at once
+ruff check orca/ && ruff format --check orca/ && mypy orca/
+
+# Auto-fix linting issues
+ruff check orca/ --fix
+
+# Auto-format code
+ruff format orca/
+
+# Type checking
+mypy orca/
+
+# Run test suite
+pytest tests/
+
+# With coverage
+pytest tests/ --cov=orca --cov-report=term-missing
+```
+
+### Test Organization
+
+```
+tests/
+├── conftest.py              # Shared fixtures (temp_dir, initialized_db, etc.)
+├── unit/
+│   ├── test_utils/
+│   │   ├── test_time.py     # utcnow() tests
+│   │   └── test_identity.py # Loop ID resolution tests
+│   └── test_validators/
+│       └── test_validator.py # SpecIRValidator tests
+├── integration/
+│   ├── test_db_connection.py # Database layer tests
+│   └── test_task_model.py   # Task model CRUD tests
+└── e2e/                     # (Not yet implemented)
+    └── test_cli.py
+```
+
+### Test Coverage
+
+Current test coverage by module:
+
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| `utils/time.py` | 5 | Unit |
+| `utils/identity.py` | 10 | Unit |
+| `utils/validator.py` | 8 | Unit |
+| `db/connection.py` | 15 | Integration |
+| `models/task.py` | 14 | Integration |
+| **Total** | **52** | ✅ All passing |
+
 ## Future enhancements
 
 - [x] `orca validate-scenarios` — hidden scenario validation
+- [x] Code quality tooling — ruff, mypy, pytest configured
+- [x] Integration test suite — database and model tests
 - [ ] `orca loops` — spawn multiple loops in new terminal windows
 - [ ] `orca run` — full pipeline: refine → decompose → loops
-- [ ] `orca metrics` — loop throughput, avg task duration
+- [x] `orca metrics` — loop throughput metrics (basic)
 - [ ] `orca serve` — optional HTTP API for web dashboards
-- [ ] `orca deps add <task-id> <depends-on>` — task dependencies
+- [ ] E2E CLI tests — end-to-end command tests
+- [ ] Model tests for `loop.py` — Loop model CRUD tests
