@@ -1,27 +1,56 @@
-# Byte-compiled / optimized / DLL files
+# Ralph Loop Orchestrator
+.plan/
+.pi/
+.orch/
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
-*.egg-info/
-dist/
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Virtual environments
-venv/
-env/
-.venv/
-
-# macOS
-.DS_Store
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
 
 # IDE
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
-# Plan directory
-.plan/
+# macOS
+.DS_Store
+
+# Ruff
+.ruff_cache/
+
+# MyPy
+.mypy_cache/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
