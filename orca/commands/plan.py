@@ -37,9 +37,11 @@ class PlanGenerator:
         self,
         max_iterations: int = 10,
         pi_skill: str = "plan",
+        verbose: bool = False,
     ):
         self.max_iterations = max_iterations
         self.pi_skill = pi_skill
+        self.verbose = verbose
 
     def generate(
         self,
@@ -88,7 +90,8 @@ class PlanGenerator:
             prompt = self._build_prompt(spec_content, plan_content, i)
 
             # Call pi with retry logic for transient errors
-            print(f"[plan] Iteration {i}/{self.max_iterations} — refining plan...")
+            if self.verbose:
+                print(f"[plan] Iteration {i}/{self.max_iterations}...")
             
             max_retries = 3
             retry_delay = 5  # seconds
@@ -147,6 +150,13 @@ class PlanGenerator:
                     
                     # Success - update plan content
                     plan_content = output
+                    
+                    # Log for debugging
+                    current_hash = self._compute_content_hash(plan_content)
+                    if self.verbose:
+                        stability = "✓" if current_hash == prev_hash and i > 1 else "✗"
+                        print(f"[plan]   hash={current_hash} (prev={prev_hash}) {stability}")
+                    
                     break  # Exit retry loop on success
                     
                 except subprocess.TimeoutExpired:
@@ -161,8 +171,13 @@ class PlanGenerator:
 
             # Check hash stability
             current_hash = self._compute_content_hash(plan_content)
+            if self.verbose:
+                feat_count = len([l for l in plan_content.split('\n') if l.startswith('### FEAT-')])
+                task_count = len([l for l in plan_content.split('\n') if '- [ ] TASK-' in l])
+                print(f"[plan]   hash={current_hash} prev={prev_hash} feats={feat_count} tasks={task_count}")
+            
             if current_hash == prev_hash and i > 1:
-                print(f"[plan] Plan stabilised after {i} iterations")
+                print(f"[plan] ✓ Plan stabilised after {i} iterations")
                 break
             prev_hash = current_hash
 
@@ -342,6 +357,7 @@ def handle_plan(args) -> dict:
     generator = PlanGenerator(
         max_iterations=max_iterations,
         pi_skill=pi_skill,
+        verbose=getattr(args, "verbose", False),
     )
 
     result = generator.generate(spec_content, spec_display, output_path)

@@ -155,6 +155,9 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--force", action="store_true", help="Overwrite existing plan"
     )
+    plan.add_argument(
+        "--verbose", "-v", action="store_true", help="Show debug output"
+    )
 
     # audit
     audit = sub.add_parser(
