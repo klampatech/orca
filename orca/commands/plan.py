@@ -76,7 +76,7 @@ class PlanGenerator:
         if output_path.exists():
             existing_content = output_path.read_text()
 
-        plan_content = self._initial_plan(project_name, spec_path, existing_content)
+        plan_content = self._initial_plan(project_name, spec_display, existing_content)
 
         iterations = 0
         prev_hash = ""
