@@ -87,37 +87,77 @@ class PlanGenerator:
             # Build the prompt for pi
             prompt = self._build_prompt(spec_content, plan_content, i)
 
-            # Call pi with the plan skill
+            # Call pi with retry logic for transient errors
             print(f"[plan] Iteration {i}/{self.max_iterations} — refining plan...")
-            pi_result = subprocess.run(
-                ["pi", "--skill", self.pi_skill, "-p", prompt],
-                capture_output=True,
-                text=True,
-                timeout=300,
-                cwd=Path.cwd(),
-            )
+            
+            max_retries = 3
+            retry_delay = 5  # seconds
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    pi_result = subprocess.run(
+                        ["pi", "--skill", self.pi_skill, "-p", prompt],
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        cwd=Path.cwd(),
+                    )
 
-            if pi_result.returncode != 0:
-                stderr = pi_result.stderr[:1000] if pi_result.stderr else ""
-                raise RuntimeError(
-                    f"Plan generation failed at iteration {i}: {stderr}"
-                )
+                    if pi_result.returncode != 0:
+                        stderr = pi_result.stderr[:1000] if pi_result.stderr else ""
+                        last_error = stderr
+                        
+                        # Check for retryable errors
+                        retryable = any(err in stderr.lower() for err in [
+                            "rate limit", "429", "timeout", "503", "502", "500",
+                            "connection", "network", "temporarily"
+                        ])
+                        
+                        if retryable and attempt < max_retries - 1:
+                            wait_time = retry_delay * (2 ** attempt)
+                            print(f"[plan] Retryable error, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                            import time
+                            time.sleep(wait_time)
+                            continue
+                        
+                        raise RuntimeError(
+                            f"Plan generation failed at iteration {i}: {stderr}"
+                        )
 
-            output = pi_result.stdout.strip()
-            if not output:
-                # Log stderr for debugging
-                stderr = pi_result.stderr[:500] if pi_result.stderr else ""
-                print(f"[plan] Warning: Empty output from pi at iteration {i}")
-                print(f"[plan] stderr: {stderr}")
-                # Continue with existing plan_content instead of failing
-                if plan_content:
-                    print(f"[plan] Retrying with existing plan...")
-                    continue
-                raise RuntimeError(
-                    f"Plan generation returned empty output at iteration {i}"
-                )
-
-            plan_content = output
+                    output = pi_result.stdout.strip()
+                    if not output:
+                        stderr = pi_result.stderr[:500] if pi_result.stderr else ""
+                        last_error = stderr or "empty output"
+                        
+                        if attempt < max_retries - 1:
+                            wait_time = retry_delay * (2 ** attempt)
+                            print(f"[plan] Empty output, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                            import time
+                            time.sleep(wait_time)
+                            continue
+                        
+                        # Last attempt - continue with existing plan if available
+                        if plan_content:
+                            print(f"[plan] Using existing plan after {max_retries} failed attempts")
+                            break
+                        raise RuntimeError(
+                            f"Plan generation returned empty output at iteration {i}"
+                        )
+                    
+                    # Success - update plan content
+                    plan_content = output
+                    break  # Exit retry loop on success
+                    
+                except subprocess.TimeoutExpired:
+                    last_error = "pi timed out"
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        print(f"[plan] Timeout, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                        import time
+                        time.sleep(wait_time)
+                    else:
+                        raise RuntimeError(f"pi timed out after {max_retries} attempts")
 
             # Check hash stability
             current_hash = self._compute_content_hash(plan_content)
