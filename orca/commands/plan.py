@@ -143,8 +143,8 @@ class PlanGenerator:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _extract_project_name(self, spec_content: str, spec_path: Path) -> str:
-        """Extract project name from spec content or filename."""
+    def _extract_project_name(self, spec_content: str, spec_display: str) -> str:
+        """Extract project name from spec content or display name."""
         for line in spec_content.splitlines():
             # Match **Project:** or Project: patterns
             m = re.match(r"^\*\*Project:\*\*\s*(.+)$", line)
@@ -153,10 +153,10 @@ class PlanGenerator:
             m = re.match(r"^Project:\s*(.+)$", line)
             if m:
                 return m.group(1).strip()
-        # Fallback: stem of spec file
-        return spec_path.stem
+        # Fallback: use spec display (strip path prefix)
+        return Path(spec_display.split("/")[-1].split(" ")[0]).stem or "Project"
 
-    def _initial_plan(self, project_name: str, spec_path: Path, existing: str | None) -> str:
+    def _initial_plan(self, project_name: str, spec_display: str, existing: str | None) -> str:
         """Create the initial plan content."""
         if existing:
             return existing
@@ -165,7 +165,7 @@ class PlanGenerator:
             f"# Implementation Plan\n"
             f"\n"
             f"**Project:** {project_name}\n"
-            f"**Spec:** {spec_path}\n"
+            f"**Spec:** {spec_display}\n"
             f"\n"
             f"## Features\n"
             f"\n"
