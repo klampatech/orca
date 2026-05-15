@@ -90,8 +90,7 @@ class PlanGenerator:
             # Call pi with the plan skill
             print(f"[plan] Iteration {i}/{self.max_iterations} — refining plan...")
             pi_result = subprocess.run(
-                ["pi", "-s", self.pi_skill],
-                input=prompt,
+                ["pi", "--skill", self.pi_skill, "-p", prompt],
                 capture_output=True,
                 text=True,
                 timeout=300,
