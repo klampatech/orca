@@ -5,7 +5,7 @@ Usage:
     orca init [--loop-id ID]
     orca add <spec> <description> [--priority N]
     orca decompose <spec.md> [--priority N] [--dry-run]
-    orca refine <spec.md> [--output <path>] [--max-iterations N] [--pi-skill <name>]
+    orca plan <spec.md> [--output <path>] [--max-iterations N] [--pi-skill <name>]
     orca claim [--loop-id ID]
     orca heartbeat <task-id> [--loop-id ID]
     orca complete <task-id> [--loop-id ID] [--result TEXT]
@@ -47,30 +47,54 @@ def build_parser() -> argparse.ArgumentParser:
     add = sub.add_parser("add", help="Add a task to the backlog")
     add.add_argument("spec", nargs="?", help="Path to spec file (optional)")
     add.add_argument("description", help="Task description")
-    add.add_argument("--priority", type=int, default=0, help="Task priority (default: 0)")
+    add.add_argument(
+        "--priority", type=int, default=0, help="Task priority (default: 0)"
+    )
 
     # claim
     claim = sub.add_parser("claim", help="Atomically claim an available task")
-    claim.add_argument("loop_id", nargs="?", help="Loop ID (default: resolved from env or ~/.orch/loop_id)")
+    claim.add_argument(
+        "loop_id",
+        nargs="?",
+        help="Loop ID (default: resolved from env or ~/.orch/loop_id)",
+    )
 
     # heartbeat
     heartbeat = sub.add_parser("heartbeat", help="Update heartbeat for an active task")
     heartbeat.add_argument("task_id", help="Task ID")
-    heartbeat.add_argument("loop_id", nargs="?", help="Loop ID (default: resolved automatically)")
+    heartbeat.add_argument(
+        "loop_id", nargs="?", help="Loop ID (default: resolved automatically)"
+    )
 
     # complete
-    complete = sub.add_parser("complete", help="Mark a task as completed (runs tests by default)")
+    complete = sub.add_parser(
+        "complete", help="Mark a task as completed (runs tests by default)"
+    )
     complete.add_argument("task_id", help="Task ID")
-    complete.add_argument("loop_id", nargs="?", help="Loop ID (default: resolved automatically)")
+    complete.add_argument(
+        "loop_id", nargs="?", help="Loop ID (default: resolved automatically)"
+    )
     complete.add_argument("--result", help="Result summary")
-    complete.add_argument("--no-verify", action="store_true", help="Skip test verification (use with caution)")
+    complete.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip test verification (use with caution)",
+    )
 
     # fail
-    fail = sub.add_parser("fail", help="Mark a task as failed (returns to pool by default)")
+    fail = sub.add_parser(
+        "fail", help="Mark a task as failed (returns to pool by default)"
+    )
     fail.add_argument("task_id", help="Task ID")
-    fail.add_argument("loop_id", nargs="?", help="Loop ID (default: resolved automatically)")
+    fail.add_argument(
+        "loop_id", nargs="?", help="Loop ID (default: resolved automatically)"
+    )
     fail.add_argument("--error", help="Error message")
-    fail.add_argument("--permanent", action="store_true", help="Mark as permanently failed (not returned to pool)")
+    fail.add_argument(
+        "--permanent",
+        action="store_true",
+        help="Mark as permanently failed (not returned to pool)",
+    )
 
     # status
     sub.add_parser("status", help="Show all tasks grouped by status")
@@ -79,7 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     lst = sub.add_parser("list", help="List tasks (optionally filtered)")
     lst.add_argument(
         "--status",
-        choices=["available", "claimed", "completed", "failed"],
+        choices=[
+            "available",
+            "claimed",
+            "completed",
+            "failed",
+            "validation",
+            "blocked",
+        ],
         help="Filter by status",
     )
 
@@ -95,27 +126,88 @@ def build_parser() -> argparse.ArgumentParser:
     info.add_argument("task_id", help="Task ID")
 
     # decompose
-    decomp = sub.add_parser("decompose", help="Decompose a markdown TDD spec into tasks")
-    decomp.add_argument("spec", help="Path to markdown TDD spec file")
+    decomp = sub.add_parser(
+        "decompose", help="Decompose a markdown TDD spec or plan into tasks"
+    )
+    decomp.add_argument("spec", help="Path to markdown spec or plan file")
     decomp.add_argument("description", nargs="?", help="Override feature title")
-    decomp.add_argument("--priority", type=int, default=0, help="Base priority (default: 0)")
-    decomp.add_argument("--dry-run", action="store_true", help="Show tasks without creating them")
+    decomp.add_argument(
+        "--priority", type=int, default=0, help="Base priority (default: 0)"
+    )
+    decomp.add_argument(
+        "--dry-run", action="store_true", help="Show tasks without creating them"
+    )
 
-    # refine
-    refine = sub.add_parser("refine", help="Refine raw spec into valid spec.ir.json using pi")
-    refine.add_argument("spec", help="Path to raw spec file (any format)")
-    refine.add_argument("--output", help="Override output path (default: <spec-dir>/spec.ir.json)")
-    refine.add_argument("--max-iterations", type=int, default=5, help="Max refine loops (default: 5)")
-    refine.add_argument("--pi-skill", default="ir-spec-generator", help="pi skill to use (default: ir-spec-generator)")
+    # plan
+    plan = sub.add_parser(
+        "plan", help="Generate an implementation plan from a spec using LLM"
+    )
+    plan.add_argument("spec", help="Path to source spec file")
+    plan.add_argument(
+        "--output", "-o", help="Output path (default: IMPLEMENTATION_PLAN.md)"
+    )
+    plan.add_argument(
+        "--max-iterations", type=int, default=10, help="Max iterations (default: 10)"
+    )
+    plan.add_argument(
+        "--pi-skill", default="plan", help="pi skill to use (default: plan)"
+    )
+    plan.add_argument(
+        "--force", action="store_true", help="Overwrite existing plan"
+    )
+    plan.add_argument(
+        "--verbose", "-v", action="store_true", help="Show debug output"
+    )
+
+    # audit
+    audit = sub.add_parser(
+        "audit", help="Compare spec.ir.json against source spec for drift detection"
+    )
+    audit.add_argument("spec", help="Path to source spec file (spec.md)")
+    audit.add_argument("ir", help="Path to IR output file (spec.ir.json)")
+    audit.add_argument(
+        "--pi-skill",
+        default="ir-spec-generator",
+        help="pi skill to use (default: ir-spec-generator)",
+    )
 
     # loop
     loop = sub.add_parser("loop", help="Spawn a Ralph loop in a new terminal window")
-    loop.add_argument("--claim-only", action="store_true", help="Claim one task and exit immediately")
+    loop.add_argument(
+        "--claim-only", action="store_true", help="Claim one task and exit immediately"
+    )
 
     # loops
     loops = sub.add_parser("loops", help="Spawn multiple Ralph loops")
     loops.add_argument("n", type=int, help="Number of loops to spawn")
-    loops.add_argument("--claim-only", action="store_true", help="Claim one task per loop and exit immediately")
+    loops.add_argument(
+        "--claim-only",
+        action="store_true",
+        help="Claim one task per loop and exit immediately",
+    )
+
+    # validate-scenarios
+    validate = sub.add_parser(
+        "validate-scenarios", help="Run hidden scenario validation for a feature"
+    )
+    validate.add_argument("feature_id", nargs="?", help="Feature root task ID")
+    validate.add_argument(
+        "--check-all", action="store_true", help="Validate all complete features"
+    )
+
+    # metrics
+    metrics = sub.add_parser("metrics", help="Show throughput and duration metrics")
+    metrics.add_argument("spec", nargs="?", help="Filter metrics to a specific spec")
+
+    # serve
+    serve = sub.add_parser("serve", help="Start HTTP API server")
+    serve.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")
+    serve.add_argument(
+        "--port", type=int, default=8080, help="HTTP port (default: 8080)"
+    )
+
+    # migrate
+    sub.add_parser("migrate", help="Apply pending database migrations")
 
     return parser
 
@@ -138,15 +230,30 @@ def main() -> int:
         result = handler(args)
     except RuntimeError as e:
         if args.json:
-            print(json.dumps({"command": args.command, "status": "error", "message": str(e)}))
+            print(
+                json.dumps(
+                    {"command": args.command, "status": "error", "message": str(e)}
+                )
+            )
         else:
             print(f"Error: {e}", file=sys.stderr)
         return 1
     except Exception as e:
+        import traceback
         if args.json:
-            print(json.dumps({"command": args.command, "status": "error", "message": f"{type(e).__name__}: {e}"}))
+            print(
+                json.dumps(
+                    {
+                        "command": args.command,
+                        "status": "error",
+                        "message": f"{type(e).__name__}: {e}",
+                        "traceback": traceback.format_exc()[-1000:],
+                    }
+                )
+            )
         else:
             print(f"Unexpected error: {e}", file=sys.stderr)
+            print(traceback.format_exc()[-1000:], file=sys.stderr)
         return 1
 
     if args.json:

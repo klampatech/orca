@@ -1,6 +1,7 @@
 """orch init — Initialize the orchestrator in the current directory."""
 
 from ..db.connection import get_orch_dir, init_database
+from ..hooks import install_hooks
 from ..utils.identity import ensure_loop_id
 
 
@@ -21,17 +22,24 @@ def handle_init(args=None) -> dict:
     except OSError:
         pass
 
+    # Install git pre-commit hook
+    hook_installed = install_hooks()
+
     return {
         "command": "init",
         "status": "success",
         "orch_dir": str(orch_dir),
         "db_path": str(db_path),
+        "hook_installed": hook_installed,
     }
 
 
 def format_init_human(result: dict) -> str:
-    return (
+    msg = (
         f"Ralph Loop Orchestrator initialized at {result['orch_dir']}\n"
         f"Database: {result['db_path']} (WAL mode)\n"
         "Ready to coordinate Ralph loops."
     )
+    if result.get("hook_installed"):
+        msg += "\n✓ Pre-commit hook installed"
+    return msg

@@ -1,0 +1,8 @@
+# =============================================================================
+# Ruff Configuration
+# =============================================================================
+# This file provides IDE integration for Ruff without modifying pyproject.toml
+# Main configuration lives in pyproject.toml [tool.ruff] section
+
+# Ruff is configured in pyproject.toml
+# See: https://docs.astral.sh/ruff/configuration/

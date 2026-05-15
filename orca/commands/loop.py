@@ -1,19 +1,33 @@
-"""Spawn Ralph loops — inline in current terminal or in new windows."""
+"""Spawn Ralph loops — inline in current terminal or in new windows.
+
+Logs loop events, task operations, and terminal output to .orch/logs/ for debugging.
+"""
 
 from __future__ import annotations
 
+import time
+import uuid
 from pathlib import Path
 
 import json
 import shutil
 import subprocess
 import threading
-import time
-import uuid
+
+from ..utils.logging import (
+    log_loop_start,
+    log_loop_end,
+    log_loop_error,
+    log_task_claim,
+    log_task_complete,
+    log_task_fail,
+    log_inference,
+    log_terminal_output,
+)
 
 
-ORCA_CMD = [shutil.which("orca")]
-PI_CMD = shutil.which("pi")
+ORCA_CMD: list[str] = [shutil.which("orca") or "orca"]
+PI_CMD: str | None = shutil.which("pi")
 
 
 def _claim_task() -> str | None:
@@ -51,33 +65,56 @@ def _get_task_info(task_id: str) -> dict | None:
 
 
 def _run_pi(prompt: str) -> str:
-    """Pipe a prompt to pi -p, return the result text."""
+    """Pipe a prompt to pi -p, return the result text.
+
+    Also logs the inference for debugging.
+    """
     if PI_CMD is None:
         raise RuntimeError("pi CLI not found in PATH")
 
+    cmd: list[str] = [PI_CMD, "-p", prompt]
+
+    start_time = time.time()
     result = subprocess.run(
-        [PI_CMD, "-p", prompt],
+        cmd,
         capture_output=True,
         text=True,
         timeout=300,
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"pi exited with code {result.returncode}: {result.stderr[:500]}")
+    duration_ms = int((time.time() - start_time) * 1000)
 
-    return result.stdout.strip()[:1000]
+    # Log terminal output
+    log_terminal_output(
+        source="pi",
+        command=" ".join(cmd),
+        stdout=result.stdout,
+        stderr=result.stderr,
+        exit_code=result.returncode,
+        duration_ms=duration_ms,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"pi exited with code {result.returncode}: {result.stderr[:500]}"
+        )
+
+    return result.stdout.strip()
 
 
 def _run_tests() -> tuple[bool, str]:
     """Run project tests and return (success, output).
-    
+
     Detects project type and runs appropriate test command:
     - Node.js (package.json): npm test
     - Python (pytest, pyproject.toml, setup.py): python -m pytest
     - Go (go.mod): go test
     - Ruby (Gemfile): bundle exec rspec
+
+    Also logs the test output.
     """
     cwd = Path.cwd()
-    
+    start_time = time.time()
+
     # Detect Node.js project
     if (cwd / "package.json").exists():
         result = subprocess.run(
@@ -86,27 +123,50 @@ def _run_tests() -> tuple[bool, str]:
             text=True,
             timeout=120,
         )
+        duration_ms = int((time.time() - start_time) * 1000)
         success = result.returncode == 0
         output = result.stdout[:3000] if result.stdout else result.stderr[:3000]
+
+        log_terminal_output(
+            source="npm",
+            command="npm test",
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+            duration_ms=duration_ms,
+        )
+
         return success, output
-    
+
     # Detect Python project
     has_pyproject = (cwd / "pyproject.toml").exists()
     has_setup = (cwd / "setup.py").exists()
     has_requirements = (cwd / "requirements.txt").exists()
-    
+
     if has_pyproject or has_setup or has_requirements:
-        python_cmd = shutil.which("python3") or shutil.which("python")
+        python_cmd = shutil.which("python3") or shutil.which("python") or "python"
+        python_cmd_list: list[str] = [python_cmd]
         result = subprocess.run(
-            [python_cmd, "-m", "pytest", "-v", "--tb=short"],
+            python_cmd_list + ["-m", "pytest", "-v", "--tb=short"],
             capture_output=True,
             text=True,
             timeout=120,
         )
+        duration_ms = int((time.time() - start_time) * 1000)
         success = result.returncode == 0
         output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+
+        log_terminal_output(
+            source="pytest",
+            command=f"{' '.join(python_cmd_list)} -m pytest -v --tb=short",
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+            duration_ms=duration_ms,
+        )
+
         return success, output
-    
+
     # Detect Go project
     if (cwd / "go.mod").exists():
         result = subprocess.run(
@@ -115,10 +175,21 @@ def _run_tests() -> tuple[bool, str]:
             text=True,
             timeout=120,
         )
+        duration_ms = int((time.time() - start_time) * 1000)
         success = result.returncode == 0
         output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+
+        log_terminal_output(
+            source="go",
+            command="go test ./...",
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+            duration_ms=duration_ms,
+        )
+
         return success, output
-    
+
     # Detect Ruby project (Rails or RSpec)
     if (cwd / "Gemfile").exists():
         result = subprocess.run(
@@ -127,12 +198,26 @@ def _run_tests() -> tuple[bool, str]:
             text=True,
             timeout=120,
         )
+        duration_ms = int((time.time() - start_time) * 1000)
         success = result.returncode == 0
         output = result.stdout[:2000] if result.stdout else result.stderr[:2000]
+
+        log_terminal_output(
+            source="rspec",
+            command="bundle exec rspec",
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+            duration_ms=duration_ms,
+        )
+
         return success, output
-    
+
     # No known project type detected
-    return False, "No test runner detected (no package.json, pyproject.toml, go.mod, or Gemfile found)"
+    return (
+        False,
+        "No test runner detected (no package.json, pyproject.toml, go.mod, or Gemfile found)",
+    )
 
 
 def _send_heartbeat(task_id: str, loop_id: str, stop_event: threading.Event) -> None:
@@ -147,19 +232,32 @@ def _send_heartbeat(task_id: str, loop_id: str, stop_event: threading.Event) -> 
             break
 
 
-def _do_work(task_id: str, description: str, spec_path: str | None, ir_snippet: str | None, loop_id: str) -> str:
-    """Run pi to implement the given task, validate with tests. Returns result summary."""
+def _do_work(
+    task_id: str,
+    description: str,
+    spec_path: str | None,
+    ir_snippet: str | None,
+    loop_id: str,
+) -> str:
+    """Run pi to implement the given task, validate with tests. Returns result summary.
+
+    Logs the inference for debugging.
+    """
+    start_time = time.time()
+
     # Build the prompt with optional IR snippet injection (Phase 1 IR validator)
     prompt_parts = [
         "You are Otto — an autonomous AI coding agent.\n",
         "Implement the following task using TDD (Test-Driven Development). Work in the current directory.\n",
     ]
-    
+
     # Inject IR snippet if available
     if ir_snippet:
         try:
             snippet_json = json.loads(ir_snippet)
-            prompt_parts.append("## IR Spec Snippet (do not skip — this defines what \"done\" means)")
+            prompt_parts.append(
+                '## IR Spec Snippet (do not skip — this defines what "done" means)'
+            )
             prompt_parts.append(json.dumps(snippet_json, indent=2))
             prompt_parts.append("")
         except (json.JSONDecodeError, TypeError):
@@ -167,35 +265,54 @@ def _do_work(task_id: str, description: str, spec_path: str | None, ir_snippet: 
             prompt_parts.append("## IR Spec Snippet")
             prompt_parts.append(str(ir_snippet))
             prompt_parts.append("")
-    
-    prompt_parts.extend([
-        "## Scenario",
-        description,
-        "",
-        "## Instructions (follow in order)",
-        "1. If a spec file exists at the path below, read it first to understand requirements",
-        "2. Write failing tests FIRST (red phase)",
-        "3. Implement the feature to make tests pass (green phase)",
-        "4. Run tests to verify correctness",
-        "5. Commit and push",
-        "",
-        "IMPORTANT: You MUST write tests before implementing. Do not skip the test-writing phase.\n",
-    ])
-    
+
+    prompt_parts.extend(
+        [
+            "## Scenario",
+            description,
+            "",
+            "## Instructions (follow in order)",
+            "1. If a spec file exists at the path below, read it first to understand requirements",
+            "2. Write failing tests FIRST (red phase)",
+            "3. Implement the feature to make tests pass (green phase)",
+            "4. Run tests to verify correctness",
+            "5. Commit and push",
+            "",
+            "IMPORTANT: You MUST write tests before implementing. Do not skip the test-writing phase.\n",
+        ]
+    )
+
     if spec_path:
         prompt_parts.append(f"Spec file: {spec_path}")
-    
-    prompt_parts.append("Return a brief summary of what you did, including test results.")
-    
+
+    prompt_parts.append(
+        "Return a brief summary of what you did, including test results."
+    )
+
     test_first_prompt = "\n".join(prompt_parts)
-    
+
     stop_heartbeat = threading.Event()
-    heartbeat_thread = threading.Thread(target=_send_heartbeat, args=(task_id, loop_id, stop_heartbeat), daemon=True)
+    heartbeat_thread = threading.Thread(
+        target=_send_heartbeat, args=(task_id, loop_id, stop_heartbeat), daemon=True
+    )
     heartbeat_thread.start()
 
     print("[loop] Starting pi (test-first)...")
+
+    # Log inference start
+    infer_start = time.time()
     try:
         result_text = _run_pi(test_first_prompt)
+        infer_duration_ms = int((time.time() - infer_start) * 1000)
+
+        # Log inference completion
+        log_inference(
+            prompt=test_first_prompt,
+            response=result_text,
+            duration_ms=infer_duration_ms,
+            success=True,
+        )
+
         print(f"[loop] pi done: {result_text[:100]}")
 
         # Run validation tests
@@ -207,6 +324,16 @@ def _do_work(task_id: str, description: str, spec_path: str | None, ir_snippet: 
     finally:
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=5)
+
+    work_duration = time.time() - start_time
+
+    # Log task completion
+    log_task_complete(
+        task_id=task_id,
+        loop_id=loop_id,
+        duration_seconds=work_duration,
+        exit_status=0,
+    )
 
     return result_text
 
@@ -220,7 +347,9 @@ def _complete_task(task_id: str, result_text: str = "Done") -> None:
         text=True,
     )
     if result.returncode != 0:
-        print(f"[loop] ERROR: complete failed (exit {result.returncode}): {result.stderr[:200]}")
+        print(
+            f"[loop] ERROR: complete failed (exit {result.returncode}): {result.stderr[:200]}"
+        )
     else:
         print(f"[loop] Completed {task_id}")
 
@@ -234,7 +363,9 @@ def _fail_task(task_id: str, error_text: str = "Unknown error") -> None:
         text=True,
     )
     if result.returncode != 0:
-        print(f"[loop] ERROR: fail failed (exit {result.returncode}): {result.stderr[:200]}")
+        print(
+            f"[loop] ERROR: fail failed (exit {result.returncode}): {result.stderr[:200]}"
+        )
     else:
         print(f"[loop] Failed {task_id}: {error_text[:100]}")
 
@@ -244,9 +375,17 @@ def handle_loop(args) -> dict:
 
     Blocks forever until Ctrl+C. Each invocation uses a fresh UUID as loop ID.
     A --claim-only flag claims one task, completes it, and exits immediately.
+
+    Logs loop events to .orch/logs/.
     """
     loop_id = str(uuid.uuid4())
+    start_time = time.time()
+    tasks_processed = 0
+
     print(f"[loop] Starting Ralph loop with ID: {loop_id}")
+
+    # Log loop start
+    log_loop_start(loop_id)
 
     claim_only: bool = getattr(args, "claim_only", False)
     task_id = _claim_task()
@@ -254,7 +393,12 @@ def handle_loop(args) -> dict:
     if task_id is None:
         if claim_only:
             print("[loop] No tasks available — exiting (claim-only mode)")
-            return {"command": "loop", "status": "success", "count": 1, "claimed": False}
+            return {
+                "command": "loop",
+                "status": "success",
+                "count": 1,
+                "claimed": False,
+            }
         print("[loop] No tasks available, sleeping 30s...")
 
     if claim_only:
@@ -264,53 +408,84 @@ def handle_loop(args) -> dict:
             description = info.get("description", "") if info else ""
             spec_path = info.get("spec_path") if info else None
             ir_snippet = info.get("ir_snippet") if info else None
+            priority = info.get("priority", 0) if info else 0
+
+            # Log task claim
+            log_task_claim(task_id, loop_id, priority)
+
             try:
-                result_text = _do_work(task_id, description, spec_path, ir_snippet, loop_id)
+                result_text = _do_work(
+                    task_id, description, spec_path, ir_snippet, loop_id
+                )
                 print(f"[loop] pi done: {result_text[:100]}")
                 _complete_task(task_id, result_text[:500])
             except Exception as e:
                 print(f"[loop] Work failed: {e}")
+                log_task_fail(task_id, loop_id, str(e))
                 _fail_task(task_id, str(e))
+
+            tasks_processed = 1
         else:
             print("[loop] No tasks available — exiting (claim-only mode)")
+
+        duration = time.time() - start_time
+        log_loop_end(loop_id, duration, tasks_processed)
+
         return {"command": "loop", "status": "success", "count": 1, "claimed": task_id}
 
     # Continuous loop — runs until KeyboardInterrupt
-    while True:
-        if task_id is not None:
-            print(f"[loop] Claimed {task_id}")
+    try:
+        while True:
+            if task_id is not None:
+                print(f"[loop] Claimed {task_id}")
 
-            # Get full task info for description + spec + ir_snippet (Phase 1)
-            info = _get_task_info(task_id)
-            description = info.get("description", "") if info else ""
-            spec_path = info.get("spec_path") if info else None
-            ir_snippet = info.get("ir_snippet") if info else None
+                # Get full task info for description + spec + ir_snippet (Phase 1)
+                info = _get_task_info(task_id)
+                description = info.get("description", "") if info else ""
+                spec_path = info.get("spec_path") if info else None
+                ir_snippet = info.get("ir_snippet") if info else None
+                priority = info.get("priority", 0) if info else 0
 
-            try:
-                result_text = _do_work(task_id, description, spec_path, ir_snippet, loop_id)
-                print(f"[loop] pi done: {result_text[:100]}")
-                _complete_task(task_id, result_text[:500])
-            except Exception as e:
-                print(f"[loop] Work failed: {e}")
-                _fail_task(task_id, str(e))
+                # Log task claim
+                log_task_claim(task_id, loop_id, priority)
 
-        task_id = None
-        while task_id is None:
-            print("[loop] No tasks available, sleeping 30s...")
-            try:
-                time.sleep(30)
-            except KeyboardInterrupt:
-                print("\n[loop] Interrupted — exiting.")
-                return {"command": "loop", "status": "success", "count": 1}
+                try:
+                    result_text = _do_work(
+                        task_id, description, spec_path, ir_snippet, loop_id
+                    )
+                    print(f"[loop] pi done: {result_text[:100]}")
+                    _complete_task(task_id, result_text[:500])
+                    tasks_processed += 1
+                except Exception as e:
+                    print(f"[loop] Work failed: {e}")
+                    log_task_fail(task_id, loop_id, str(e))
+                    _fail_task(task_id, str(e))
 
-            task_id = _claim_task()
-            if task_id is None:
-                print("[loop] No tasks available, retrying...")
+            task_id = None
+            while task_id is None:
+                print("[loop] No tasks available, sleeping 30s...")
+                try:
+                    time.sleep(30)
+                except KeyboardInterrupt:
+                    print("\n[loop] Interrupted — exiting.")
+                    duration = time.time() - start_time
+                    log_loop_end(loop_id, duration, tasks_processed)
+                    return {"command": "loop", "status": "success", "count": 1}
+
+                task_id = _claim_task()
+                if task_id is None:
+                    print("[loop] No tasks available, retrying...")
+
+    except Exception as e:
+        log_loop_error(loop_id, str(e))
+        raise
 
 
 def handle_loops(args) -> dict:
     """Spawn N Ralph loops, each in a new terminal window (not yet implemented)."""
-    raise NotImplementedError("orca loops is not yet implemented — use multiple terminal windows with orca loop")
+    raise NotImplementedError(
+        "orca loops is not yet implemented — use multiple terminal windows with orca loop"
+    )
 
 
 def format_loop_human(result: dict) -> str:
