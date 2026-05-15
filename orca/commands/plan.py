@@ -105,6 +105,14 @@ class PlanGenerator:
 
             output = pi_result.stdout.strip()
             if not output:
+                # Log stderr for debugging
+                stderr = pi_result.stderr[:500] if pi_result.stderr else ""
+                print(f"[plan] Warning: Empty output from pi at iteration {i}")
+                print(f"[plan] stderr: {stderr}")
+                # Continue with existing plan_content instead of failing
+                if plan_content:
+                    print(f"[plan] Retrying with existing plan...")
+                    continue
                 raise RuntimeError(
                     f"Plan generation returned empty output at iteration {i}"
                 )
