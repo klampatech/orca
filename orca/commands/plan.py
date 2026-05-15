@@ -43,38 +43,33 @@ class PlanGenerator:
 
     def generate(
         self,
-        spec_path: str | Path,
+        spec_content: str,
+        spec_display: str,
         output_path: str | Path,
     ) -> dict[str, Any]:
-        """Generate an implementation plan from a spec file.
+        """Generate an implementation plan from spec content.
 
         Iteratively calls `pi -s <skill>` to refine the plan until it
         stabilises or max_iterations is reached.
 
         Args:
-            spec_path: Path to the source spec file.
+            spec_content: Raw content of the spec file(s).
+            spec_display: Display name for spec (file path or dir description).
             output_path: Path where the plan will be written.
 
         Returns:
             Result dict with status, iterations, output_path, plan_summary.
 
         Raises:
-            FileNotFoundError: If spec_path does not exist.
             RuntimeError: If plan generation fails.
         """
-        spec_path = Path(spec_path)
         output_path = Path(output_path)
-
-        if not spec_path.exists():
-            raise FileNotFoundError(f"Spec file not found: {spec_path}")
-
-        spec_content = spec_path.read_text()
 
         # Ensure output directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Determine project name from spec
-        project_name = self._extract_project_name(spec_content, spec_path)
+        # Determine project name from spec content
+        project_name = self._extract_project_name(spec_content, spec_display)
 
         # Start with an empty plan or existing plan
         existing_content: str | None = None
@@ -242,7 +237,7 @@ def handle_plan(args) -> dict:
     """Handle the 'orca plan' command.
 
     Args:
-        args.spec: Path to the spec file.
+        args.spec: Path to the spec file or directory containing specs.
         args.output: Output path for the plan (default: IMPLEMENTATION_PLAN.md).
         args.max_iterations: Maximum refinement iterations (default: 10).
         args.pi_skill: Pi skill name for LLM calls (default: plan).
@@ -252,7 +247,7 @@ def handle_plan(args) -> dict:
         Result dict with status, iterations, output_path, plan_summary.
 
     Raises:
-        FileNotFoundError: If spec file does not exist.
+        FileNotFoundError: If spec file/directory does not exist.
         RuntimeError: If plan generation fails.
         ValueError: If generated plan has invalid format.
     """
@@ -262,24 +257,47 @@ def handle_plan(args) -> dict:
     pi_skill = getattr(args, "pi_skill", None) or "plan"
     force = getattr(args, "force", False)
 
-    # 1. Validate spec file exists
+    # 1. Validate spec path exists
     if not spec_path.exists():
-        raise FileNotFoundError(f"Spec file not found: {spec_path}")
+        raise FileNotFoundError(f"Spec path not found: {spec_path}")
 
-    # 2. Check output path doesn't exist (unless --force)
+    # 2. Collect spec content (file or directory)
+    if spec_path.is_dir():
+        # Collect all .md and .json files from directory
+        spec_files = sorted(spec_path.glob("*.md")) + sorted(spec_path.glob("*.json"))
+        if not spec_files:
+            raise RuntimeError(f"No spec files found in {spec_path}")
+        
+        print(f"[plan] Found {len(spec_files)} spec(s) in {spec_path}:")
+        for f in spec_files:
+            print(f"[plan]   - {f.name}")
+        
+        spec_contents = []
+        for f in spec_files:
+            content = f.read_text()
+            spec_contents.append(f"--- {f.name} ---\n{content}")
+        
+        spec_content = "\n\n".join(spec_contents)
+        spec_display = f"{spec_path}/ (contains {len(spec_files)} spec files)"
+    else:
+        # Single spec file
+        spec_content = spec_path.read_text()
+        spec_display = str(spec_path)
+
+    # 3. Check output path doesn't exist (unless --force)
     if output_path.exists() and not force:
         raise RuntimeError(
             f"Output file already exists: {output_path}. "
             f"Use --force to overwrite."
         )
 
-    # 3. Call PlanGenerator
+    # 5. Call PlanGenerator with spec content and display name
     generator = PlanGenerator(
         max_iterations=max_iterations,
         pi_skill=pi_skill,
     )
 
-    result = generator.generate(spec_path, output_path)
+    result = generator.generate(spec_content, spec_display, output_path)
 
     # 4. Validate generated plan format (already done inside generate,
     #    but double-check the written file)
