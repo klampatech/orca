@@ -152,12 +152,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--pi-skill", default="plan", help="pi skill to use (default: plan)"
     )
-    plan.add_argument(
-        "--force", action="store_true", help="Overwrite existing plan"
-    )
-    plan.add_argument(
-        "--verbose", "-v", action="store_true", help="Show debug output"
-    )
+    plan.add_argument("--force", action="store_true", help="Overwrite existing plan")
+    plan.add_argument("--verbose", "-v", action="store_true", help="Show debug output")
 
     # audit
     audit = sub.add_parser(
@@ -176,6 +172,14 @@ def build_parser() -> argparse.ArgumentParser:
     loop.add_argument(
         "--claim-only", action="store_true", help="Claim one task and exit immediately"
     )
+    loop.add_argument(
+        "--pi-timeout", type=int, default=None,
+        help="Timeout for pi invocations in seconds (default: unlimited)"
+    )
+    loop.add_argument(
+        "--spec-only", action="store_true",
+        help="Add spec file path to prompt"
+    )
 
     # loops
     loops = sub.add_parser("loops", help="Spawn multiple Ralph loops")
@@ -184,6 +188,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--claim-only",
         action="store_true",
         help="Claim one task per loop and exit immediately",
+    )
+    loops.add_argument(
+        "--pi-timeout", type=int, default=None,
+        help="Timeout for pi invocations in seconds (default: unlimited)"
     )
 
     # validate-scenarios
@@ -240,6 +248,7 @@ def main() -> int:
         return 1
     except Exception as e:
         import traceback
+
         if args.json:
             print(
                 json.dumps(
