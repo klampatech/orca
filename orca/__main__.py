@@ -180,6 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--spec-only", action="store_true",
         help="Add spec file path to prompt"
     )
+    loop.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Show detailed output including full error context"
+    )
 
     # loops
     loops = sub.add_parser("loops", help="Spawn multiple Ralph loops")
@@ -192,6 +196,10 @@ def build_parser() -> argparse.ArgumentParser:
     loops.add_argument(
         "--pi-timeout", type=int, default=None,
         help="Timeout for pi invocations in seconds (default: unlimited)"
+    )
+    loops.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Show detailed output including full error context"
     )
 
     # validate-scenarios

@@ -64,7 +64,7 @@ def _get_task_info(task_id: str) -> dict | None:
         return None
 
 
-def _run_pi(prompt: str, timeout: int | None = None) -> str:
+def _run_pi(prompt: str, timeout: int | None = None, verbose: bool = False) -> str:
     """Pipe a prompt to pi -p, return the result text.
 
     Also forks the inference for debugging.
@@ -72,11 +72,16 @@ def _run_pi(prompt: str, timeout: int | None = None) -> str:
     Args:
         prompt: The prompt to send to pi.
         timeout: Maximum seconds to wait (None = unlimited).
+        verbose: If True, print extra debugging info.
     """
     if PI_CMD is None:
         raise RuntimeError("pi CLI not found in PATH")
 
     cmd: list[str] = [PI_CMD, "-p", prompt]
+
+    if verbose:
+        print(f"[loop:debug] pi command: {' '.join(cmd[:3])} ...")
+        print(f"[loop:debug] prompt chars: {len(prompt)}")
 
     start_time = time.time()
     result = subprocess.run(
@@ -98,6 +103,17 @@ def _run_pi(prompt: str, timeout: int | None = None) -> str:
     )
 
     if result.returncode != 0:
+        # Always log inference on failure so logs capture the context
+        log_inference(
+            prompt=prompt,
+            response=f"FAILED: {result.stderr[:1000]}",
+            duration_ms=duration_ms,
+            success=False,
+        )
+        if verbose:
+            print(f"[loop:debug] pi FAILED exit_code={result.returncode}")
+            print(f"[loop:debug] pi stderr: {result.stderr[:500]}")
+            print(f"[loop:debug] pi stdout: {result.stdout[:500]}")
         raise RuntimeError(
             f"pi exited with code {result.returncode}: {result.stderr[:500]}"
         )
@@ -242,6 +258,7 @@ def _do_work(
     spec_path: str | None,
     loop_id: str,
     pi_timeout: int | None = None,
+    verbose: bool = False,
 ) -> str:
     """Run pi to implement the given task, validate with tests. Returns result summary.
 
@@ -318,7 +335,7 @@ def _do_work(
     # Log inference start
     infer_start = time.time()
     try:
-        result_text = _run_pi(test_first_prompt)
+        result_text = _run_pi(test_first_prompt, timeout=pi_timeout, verbose=verbose)
         infer_duration_ms = int((time.time() - infer_start) * 1000)
 
         # Log inference completion
@@ -405,6 +422,7 @@ def handle_loop(args) -> dict:
 
     claim_only: bool = getattr(args, "claim_only", False)
     pi_timeout: int | None = getattr(args, "pi_timeout", None)
+    verbose: bool = getattr(args, "verbose", False)
     task_id = _claim_task()
 
     if task_id is None:
@@ -430,7 +448,7 @@ def handle_loop(args) -> dict:
             log_task_claim(task_id, loop_id, priority)
 
             try:
-                result_text = _do_work(task_id, description, spec_path, loop_id, pi_timeout)
+                result_text = _do_work(task_id, description, spec_path, loop_id, pi_timeout, verbose)
                 print(f"[loop] pi done: {result_text[:100]}")
                 _complete_task(task_id, result_text[:500])
             except Exception as e:
@@ -463,7 +481,7 @@ def handle_loop(args) -> dict:
                 log_task_claim(task_id, loop_id, priority)
 
                 try:
-                    result_text = _do_work(task_id, description, spec_path, loop_id, pi_timeout)
+                    result_text = _do_work(task_id, description, spec_path, loop_id, pi_timeout, verbose)
                     print(f"[loop] pi done: {result_text[:100]}")
                     _complete_task(task_id, result_text[:500])
                     tasks_processed += 1
