@@ -12,10 +12,7 @@ from typing import Optional
 from .schema import (
     Plan,
     Task,
-    Feature,
     PlanMetadata,
-    TASK_PATTERN,
-    FEAT_PATTERN,
     compute_hash,
     validate_format,
 )
@@ -44,7 +41,7 @@ def parse_plan(path: Path | str) -> Plan:
     # Validate format
     valid, errors = validate_format(content)
     if not valid:
-        raise ValueError(f"Invalid plan format:\n  - " + "\n  - ".join(errors))
+        raise ValueError("Invalid plan format:\n  - " + "\n  - ".join(errors))
 
     return plan
 
@@ -63,7 +60,7 @@ def parse_plan_content(content: str) -> Plan:
     """
     valid, errors = validate_format(content)
     if not valid:
-        raise ValueError(f"Invalid plan format:\n  - " + "\n  - ".join(errors))
+        raise ValueError("Invalid plan format:\n  - " + "\n  - ".join(errors))
 
     return Plan.from_content(content)
 
@@ -153,7 +150,10 @@ def is_plan_stable(
         True if plan is stable and ready for decomposition.
     """
     current_hash = compute_stability_hash(plan)
-    return current_hash == previous_hash and iterations_without_change >= stability_threshold
+    return (
+        current_hash == previous_hash
+        and iterations_without_change >= stability_threshold
+    )
 
 
 def get_task_count(plan: Plan) -> int:
@@ -282,17 +282,21 @@ def generate_tasks_from_plan(plan: Plan) -> list[dict]:
         feature_snippet = {
             "id": feat_id,
             "description": feat_desc,
-            "tasks": [{"id": t.task_id, "description": t.description} for t in feature.tasks],
+            "tasks": [
+                {"id": t.task_id, "description": t.description} for t in feature.tasks
+            ],
         }
 
-        tasks.append({
-            "description": f"{feat_id} | {feat_desc[:60]}",
-            "spec_path": plan.metadata.spec_path,
-            "priority": 10,
-            "parent_id": None,
-            "root_spec_path": plan.metadata.spec_path,
-            "ir_snippet": str(feature_snippet),
-        })
+        tasks.append(
+            {
+                "description": f"{feat_id} | {feat_desc[:60]}",
+                "spec_path": plan.metadata.spec_path,
+                "priority": 10,
+                "parent_id": None,
+                "root_spec_path": plan.metadata.spec_path,
+                "ir_snippet": str(feature_snippet),
+            }
+        )
 
         # Individual task records
         for task in feature.tasks:
@@ -301,30 +305,34 @@ def generate_tasks_from_plan(plan: Plan) -> list[dict]:
                 "description": task.description,
                 "feature_id": feat_id,
             }
-            tasks.append({
-                "description": f"{task.task_id} | {task.description[:60]}",
-                "spec_path": plan.metadata.spec_path,
-                "priority": 8,
-                "parent_id": None,
-                "root_spec_path": plan.metadata.spec_path,
-                "ir_snippet": str(task_snippet),
-            })
+            tasks.append(
+                {
+                    "description": f"{task.task_id} | {task.description[:60]}",
+                    "spec_path": plan.metadata.spec_path,
+                    "priority": 8,
+                    "parent_id": None,
+                    "root_spec_path": plan.metadata.spec_path,
+                    "ir_snippet": str(task_snippet),
+                }
+            )
 
     # Process uncategorized tasks
     for task in plan.uncategorized_tasks:
         task_snippet = {
             "id": task.task_id,
             "description": task.description,
-            "feature_id": None,
+            "feature_id": "",
         }
-        tasks.append({
-            "description": f"{task.task_id} | {task.description[:60]}",
-            "spec_path": plan.metadata.spec_path,
-            "priority": 7,
-            "parent_id": None,
-            "root_spec_path": plan.metadata.spec_path,
-            "ir_snippet": str(task_snippet),
-        })
+        tasks.append(
+            {
+                "description": f"{task.task_id} | {task.description[:60]}",
+                "spec_path": plan.metadata.spec_path,
+                "priority": 7,
+                "parent_id": None,
+                "root_spec_path": plan.metadata.spec_path,
+                "ir_snippet": str(task_snippet),
+            }
+        )
 
     return tasks
 
@@ -360,9 +368,20 @@ def is_plan_format(path: Path | str) -> bool:
     """
     try:
         content = Path(path).read_text()
-        # Check for plan header and task patterns
-        has_header = "# Implementation Plan" in content or "Implementation Plan" in content
-        has_tasks = bool(TASK_PATTERN.search(content))
-        return has_header and has_tasks
+        # Check for plan header
+        has_header = (
+            "# Implementation Plan" in content or "Implementation Plan" in content
+        )
+
+        # Check for task patterns (both checked and unchecked)
+        import re
+
+        # Match both `- [ ] TASK-001:` and `- [x] TASK-001:`
+        has_tasks = bool(re.search(r"- \[.?\] (TASK-\d+):", content))
+
+        # Also check for ## Features or ## Phase sections (both are valid)
+        has_features = bool(re.search(r"^##\s+(Features|Phase\s+)", content, re.MULTILINE))
+
+        return has_header and has_tasks and has_features
     except Exception:
         return False

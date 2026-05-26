@@ -35,8 +35,8 @@ PLAN_HASH_PATTERN = re.compile(r"^\*\*Plan Hash:\*\*\s*(.+)$", re.IGNORECASE)
 # Matches the plan header
 PLAN_HEADER_PATTERN = re.compile(r"^#\s*Implementation\s+Plan\s*$", re.IGNORECASE)
 
-# Matches the features section header
-FEATURES_HEADER_PATTERN = re.compile(r"^##\s*Features\s*$", re.IGNORECASE)
+# Matches the features section header (## Features or ## Phase N: Name)
+FEATURES_HEADER_PATTERN = re.compile(r"^##\s+(Features|Phase\s+\d+.*$)", re.IGNORECASE)
 
 # Matches separator lines
 SEPARATOR_PATTERN = re.compile(r"^---+$")
@@ -213,16 +213,34 @@ class Plan:
         current_feature: Optional[Feature] = None
         current_lines: list[str] = []
 
+
         in_features = False
+        # Track which entry mode: 'features', 'phase', or None
+        # In 'phase' mode, ### FEAT- sections are subsections that should NOT be
+        # separated by --- (--- is used between Phase groups, not as terminator)
+        entry_mode: Optional[str] = None
+
         for line in content.splitlines():
-            # Detect features section
-            if FEATURES_HEADER_PATTERN.match(line):
+            # Detect features section (either "## Features" or "## Phase N: name")
+            fhdr_match = FEATURES_HEADER_PATTERN.match(line)
+            if fhdr_match:
                 in_features = True
+                # Record entry mode: 'features' for ## Features, 'phase' for ## Phase X
+                matched_text = fhdr_match.group(1)
+                if matched_text.lower() == "features":
+                    entry_mode = "features"
+                else:
+                    entry_mode = "phase"
                 continue
 
-            # Stop at separator
+            # Stop at separator only in features mode or at final footer
+            # In phase mode, separators are between phase groups, not terminators
             if SEPARATOR_PATTERN.match(line):
-                break
+                if entry_mode == "features":
+                    break
+                else:
+                    # In phase mode, continue past --- separators
+                    continue
 
             if not in_features:
                 continue
@@ -248,6 +266,7 @@ class Plan:
             # Collect task lines
             if current_feature is not None and TASK_PATTERN.match(line):
                 current_lines.append(line)
+
 
         # Save last feature
         if current_feature is not None:
@@ -374,18 +393,17 @@ def validate_format(content: str) -> tuple[bool, list[str]]:
     if not header_found:
         errors.append("Missing '# Implementation Plan' header")
 
-    # Check for ## Features (anywhere in content)
+    # Check for ## Features OR ## Phase sections (both are valid plan formats)
     has_features = False
     for line in lines:
         stripped = line.strip()
-        if stripped.lower() == "## features" or stripped.lower().startswith(
-            "## features"
-        ):
+        lower = stripped.lower()
+        if lower == "## features" or lower.startswith("## features") or lower.startswith("## phase"):
             has_features = True
             break
 
     if not has_features:
-        errors.append("Missing '## Features' section")
+        errors.append("Missing '## Features' or '## Phase' section")
 
     # Check metadata
     metadata = PlanMetadata.from_content(content)
