@@ -1,28 +1,80 @@
 """orch plan — Generate an implementation plan from a spec file.
 
-Uses an iterative LLM-driven process to produce a structured
-implementation plan (IMPLEMENTATION_PLAN.md) from a spec (markdown
-or JSON IR). The plan follows the orca plan schema:
-
-- `# Implementation Plan` header
-- `**Project:**` and `**Spec:**` metadata
-- `## Features` section with `### FEAT-NNN:` subsections
-- `- [ ] TASK-NNN:` task lines
-- `---` separator and `**Plan Hash:**` footer
-
-Returns a result dict with status, iteration count, and a plan summary
-(project name, feature count, task count).
+Uses Claude Code with the same approach as Otto:
+1. Pass spec content + existing plan + instructions directly via -p (not temp file with relative paths)
+2. Refine existing IMPLEMENTATION_PLAN.md (don't recreate)
+3. Plan hash stability detection with PLAN_STABILITY_THRESHOLD=2
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Set
 
-from ..plan.schema import validate_format
+
+PLAN_PROMPT_TEMPLATE = """
+## Your Task
+
+Generate or refine an implementation plan by analyzing the specs and existing plan below.
+
+## Critical Rule: INCREMENTAL PLANNING
+
+**The IMPLEMENTATION_PLAN.md already exists.** You MUST preserve it:
+
+1. **Read the existing plan** (provided below)
+2. **Analyze the specs** (provided below)  
+3. **Make surgical updates only:**
+   - Add new tasks that address gaps between specs and code
+   - Refine incomplete tasks that need clarification
+   - Mark tasks as complete [x] if they've been implemented
+   - Remove tasks that are no longer relevant
+4. **Do NOT recreate the entire plan** — only refine what's necessary
+
+## Output Format
+
+Output ONLY the complete, refined markdown plan. No explanation, no code blocks, no preamble.
+
+Format:
+# Implementation Plan
+
+**Project:** {project_name}
+**Spec:** {spec_display}
+
+## Features
+
+### FEAT-001: Feature Name
+
+- [ ] TASK-001: Task description
+- [x] TASK-002: Completed task
+
+...
+
+---
+
+**Plan Hash:** <hash will be computed from task IDs>
+
+## Important Refinement Rules
+
+- **Preserve task descriptions** — do NOT rephrase or reword tasks unnecessarily
+- **Consistency matters more than perfection** — minor description tweaks cause instability
+- **Coordinate task renumbering** — if renumbering, update ALL references
+- **Incremental only** — if plan looks reasonable, return it unchanged
+- **Preserve existing structure** — if the existing plan uses Phases or Features sections, keep using that same structure
+
+## Specs
+
+{specs_content}
+
+---
+## Existing Plan
+
+{existing_plan_content}
+"""
 
 
 # --------------------------------------------------------------------
@@ -31,16 +83,18 @@ from ..plan.schema import validate_format
 
 
 class PlanGenerator:
-    """Iteratively generate an implementation plan via LLM calls."""
+    """Generate an implementation plan via Claude Code."""
+
+    _MAX_RETRIES = 3
+    _RETRY_DELAY_BASE = 5  # seconds
 
     def __init__(
         self,
         max_iterations: int = 10,
-        pi_skill: str = "plan",
         verbose: bool = False,
     ):
+        """Initialize the plan generator."""
         self.max_iterations = max_iterations
-        self.pi_skill = pi_skill
         self.verbose = verbose
 
     def generate(
@@ -48,163 +102,178 @@ class PlanGenerator:
         spec_content: str,
         spec_display: str,
         output_path: str | Path,
+        existing_plan_content: str = "",
     ) -> dict[str, Any]:
-        """Generate an implementation plan from spec content."""
+        """Generate an implementation plan using Claude Code."""
         output_path = Path(output_path)
-
-        # Ensure output directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Determine project name from spec content
+        # Extract project name from spec
         project_name = self._extract_project_name(spec_content, spec_display)
 
-        # Start with an empty plan or existing plan
-        existing_content: str | None = None
-        if output_path.exists():
-            existing_content = output_path.read_text()
-
-        plan_content = self._initial_plan(project_name, spec_display, existing_content)
-
-        iterations = 0
+        # Track "existing" plan separately so we don't feed back our own output
+        # First iteration: no existing plan (starts from scratch)
+        # Subsequent iterations: refine the plan from PREVIOUS iteration
+        previous_plan = ""
         prev_hash = ""
+        stable_count = 0
+        PLAN_STABILITY_THRESHOLD = 2
 
+        # Semantic tracking: use task IDs (not file hash) for stability
+        # This means "stable" when the same task IDs appear across iterations,
+        # regardless of description changes or formatting differences
+        prev_task_ids: Set[str] = set()
+
+        # Phase 1: Generate plan until stable
         for i in range(1, self.max_iterations + 1):
-            iterations = i
-
-            # Build the prompt for pi
-            prompt = self._build_prompt(spec_content, plan_content, i)
-
-            # Call pi with retry logic for transient errors
             if self.verbose:
                 print(f"[plan] Iteration {i}/{self.max_iterations}...")
 
-            max_retries = 3
-            retry_delay = 5  # seconds
+            # Build prompt with current "existing" plan (prev iteration's output)
+            # Escape curly braces in previous_plan to avoid .format() interpolation issues
+            escaped_previous = previous_plan.replace("{", "{{}}").replace("}", "{{}}")
+            prompt = PLAN_PROMPT_TEMPLATE.format(
+                project_name=project_name,
+                spec_display=spec_display,
+                specs_content=spec_content,
+                existing_plan_content=escaped_previous if previous_plan else "N/A - no existing plan",
+            )
 
-            for attempt in range(max_retries):
-                try:
-                    pi_result = subprocess.run(
-                        ["pi", "--skill", self.pi_skill, "-p", prompt],
-                        capture_output=True,
-                        text=True,
-                        timeout=300,
-                        cwd=Path.cwd(),
-                    )
+            # Run Claude Code with context directly in prompt
+            plan_content = self._call_claude(prompt)
+            if not plan_content:
+                if self.verbose:
+                    print("[plan] No content returned, trying again...")
+                prev_hash = ""  # Reset hash to force another iteration
+                continue
 
-                    if pi_result.returncode != 0:
-                        stderr = pi_result.stderr[:1000] if pi_result.stderr else ""
-                        
-                        # Check for retryable errors
-                        retryable = any(err in stderr.lower() for err in [
-                            "rate limit", "429", "timeout", "503", "502", "500",
-                            "connection", "network", "temporarily"
-                        ])
-                        
-                        if retryable and attempt < max_retries - 1:
-                            wait_time = retry_delay * (2 ** attempt)
-                            print(f"[plan] Retryable error, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
-                            time.sleep(wait_time)
-                            continue
-                        
-                        raise RuntimeError(
-                            f"Plan generation failed at iteration {i}: {stderr}"
-                        )
+            # Clean markdown code blocks if Claude wrapped output
+            plan_content = self._unwrap_markdown(plan_content)
 
-                    output = pi_result.stdout.strip()
-                    if not output:
-                        stderr = pi_result.stderr[:500] if pi_result.stderr else ""
-                        
-                        if attempt < max_retries - 1:
-                            wait_time = retry_delay * (2 ** attempt)
-                            print(f"[plan] Empty output, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
-                            time.sleep(wait_time)
-                            continue
-                        
-                        # Last attempt - continue with existing plan if available
-                        if plan_content:
-                            print(f"[plan] Using existing plan after {max_retries} failed attempts")
-                            break
-                        raise RuntimeError(
-                            f"Plan generation returned empty output at iteration {i}"
-                        )
+            # Save this iteration's output as "previous" for next iteration
+            previous_plan = plan_content
 
-                    # Success - update plan content
-                    plan_content = output
+            # Extract current task IDs for semantic stability check
+            current_task_ids = set(self._extract_task_ids(plan_content))
 
-                    # Log for debugging
-                    current_hash = self._compute_content_hash(plan_content)
+            # Write plan for this iteration
+            output_path.write_text(plan_content)
+
+            # Check FILE hash stability (md5 like Otto) - printed for debugging
+            current_hash = self._file_hash(str(output_path))
+
+            # Semantic stability: same task IDs = stable plan content
+            # Don't rephrase descriptions unnecessarily!
+            if prev_task_ids and current_task_ids == prev_task_ids:
+                stable_count += 1
+                if self.verbose:
+                    print(f"[plan]   task_ids={len(current_task_ids)} stable_count={stable_count} (semantically stable)")
+                if stable_count >= PLAN_STABILITY_THRESHOLD:
                     if self.verbose:
-                        stability = "✓" if current_hash == prev_hash and i > 1 else "✗"
-                        print(f"[plan]   hash={current_hash} (prev={prev_hash}) {stability}")
+                        print(f"[plan] ✓ Plan semantically stable after {i} iterations")
+                    break
+            else:
+                stable_count = 0
 
-                    break  # Exit retry loop on success
-
-                except subprocess.TimeoutExpired:
-                    if attempt < max_retries - 1:
-                        wait_time = retry_delay * (2 ** attempt)
-                        print(f"[plan] Timeout, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
-                        time.sleep(wait_time)
-                    else:
-                        raise RuntimeError(f"pi timed out after {max_retries} attempts")
-
-            # Check hash stability
-            current_hash = self._compute_content_hash(plan_content)
-            if self.verbose:
-                feat_count = len([l for l in plan_content.split('\n') if l.startswith('### FEAT-')])
-                task_count = len([l for l in plan_content.split('\n') if '- [ ] TASK-' in l])
-                print(f"[plan]   hash={current_hash} prev={prev_hash} feats={feat_count} tasks={task_count}")
-
-            if current_hash == prev_hash and i > 1:
-                print(f"[plan] ✓ Plan stabilised after {i} iterations")
-                output_path.write_text(plan_content)  # Final save
-                break
+            prev_task_ids = current_task_ids
             prev_hash = current_hash
 
-        # Write final plan (save after loop ends)
-        output_path.write_text(plan_content)
-
-        # Validate the generated plan - try to fix if invalid
-        valid, errors = validate_format(plan_content)
-        if not valid:
-            # Try to fix missing Plan Hash footer
-            if not any("**Plan Hash:**" in l for l in plan_content.split('\n')):
-                print(f"[plan] Fixing missing Plan Hash footer...")
-                plan_hash = self._compute_content_hash(plan_content)
-                plan_content = plan_content.rstrip() + "\n\n---\n\n**Plan Hash:** " + plan_hash + "\n"
-                output_path.write_text(plan_content)
-                valid, errors = validate_format(plan_content)
-
-            if not valid:
-                # Give up on strict validation, write what we have
-                print(f"[plan] Warning: Plan validation issues: {errors[:3]}")
-                summary = self._extract_summary(plan_content)
-                return {
-                    "command": "plan",
-                    "status": "success",
-                    "iterations": iterations,
-                    "output_path": str(output_path),
-                    "plan_summary": summary,
-                    "warnings": errors,
-                }
-
-        # Build summary
-        summary = self._extract_summary(plan_content)
+        # Extract summary
+        feat_count = len(self._extract_feature_ids(plan_content))
+        task_count = len(self._extract_task_ids(plan_content))
 
         return {
             "command": "plan",
             "status": "success",
-            "iterations": iterations,
+            "iterations": i,
             "output_path": str(output_path),
-            "plan_summary": summary,
+            "plan_summary": {
+                "project": project_name,
+                "feature_count": feat_count,
+                "task_count": task_count,
+            },
         }
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+    def _call_claude(self, prompt: str) -> str:
+        """Call Claude Code and return the result text."""
+        for attempt in range(self._MAX_RETRIES):
+            try:
+                result = subprocess.run(
+                    [
+                        "claude",
+                        "-p",
+                        prompt,
+                        "--dangerously-skip-permissions",
+                        "--output-format=json",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    cwd=Path.cwd(),
+                )
+
+                if result.returncode != 0:
+                    stderr = result.stderr[:500] if result.stderr else ""
+                    if self.verbose:
+                        print(f"[plan] Claude error: {stderr[:200]}")
+                    if attempt < self._MAX_RETRIES - 1:
+                        time.sleep(self._RETRY_DELAY_BASE * (2**attempt))
+                        continue
+                    return ""
+
+                output = result.stdout.strip()
+                if not output:
+                    if attempt < self._MAX_RETRIES - 1:
+                        time.sleep(self._RETRY_DELAY_BASE * (2**attempt))
+                        continue
+                    return ""
+
+                # Parse JSON output if available
+                try:
+                    data = json.loads(output)
+                    if "result" in data:
+                        return data["result"]
+                    elif "content" in data:
+                        return data["content"]
+                except (json.JSONDecodeError, TypeError):
+                    pass  # Use raw output
+
+                return output
+
+            except subprocess.TimeoutExpired:
+                if self.verbose:
+                    print(f"[plan] Timeout on attempt {attempt + 1}")
+                if attempt < self._MAX_RETRIES - 1:
+                    time.sleep(self._RETRY_DELAY_BASE * (2**attempt))
+                else:
+                    if self.verbose:
+                        print("[plan] Timeout after 3 attempts")
+                continue
+
+        return ""
+
+    def _unwrap_markdown(self, content: str) -> str:
+        """Strip markdown code block wrappers if present."""
+        # Strip ```markdown ... ``` or ``` ... ``` wrapper
+        stripped = content.strip()
+        if stripped.startswith("```markdown\n"):
+            stripped = stripped[12:]
+        elif stripped.startswith("```\n"):
+            stripped = stripped[4:]
+        if stripped.endswith("\n```"):
+            stripped = stripped[:-4]
+        elif stripped.endswith("```"):
+            stripped = stripped[:-3]
+        return stripped.strip()
+
+    def _file_hash(self, filepath: str) -> str:
+        """Compute md5 hash of file (like Otto's md5 -q)."""
+        with open(filepath, "r") as f:
+            return hashlib.md5(f.read().encode()).hexdigest()
 
     def _extract_project_name(self, spec_content: str, spec_display: str) -> str:
-        """Extract project name from spec content or display name."""
-        for line in spec_content.splitlines():
+        """Extract project name from spec content."""
+        for line in spec_content.splitlines()[:50]:
             m = re.match(r"^\*\*Project:\*\*\s*(.+)$", line)
             if m:
                 return m.group(1).strip()
@@ -213,174 +282,13 @@ class PlanGenerator:
                 return m.group(1).strip()
         return Path(spec_display.split("/")[-1].split(" ")[0]).stem or "Project"
 
-    def _initial_plan(self, project_name: str, spec_display: str, existing: str | None) -> str:
-        """Create the initial plan content."""
-        if existing:
-            return existing
+    def _extract_task_ids(self, content: str) -> list[str]:
+        """Extract task IDs from plan content."""
+        return re.findall(r"(TASK-\d+)", content)
 
-        return (
-            f"# Implementation Plan\n"
-            f"\n"
-            f"**Project:** {project_name}\n"
-            f"**Spec:** {spec_display}\n"
-            f"\n"
-            f"## Features\n"
-            f"\n"
-            f"---\n"
-            f"\n"
-            f"**Plan Hash:** 0000000000\n"
-        )
-
-    def _build_prompt(self, spec_content: str, plan_content: str, iteration: int) -> str:
-        """Build the prompt for the LLM plan refinement step.
-        
-        Uses Ralph playbook approach:
-        - Study specs for requirements
-        - Compare against current plan
-        - Plan only, no implementation
-        """
-        
-        # Check if this looks like an initial/empty plan
-        is_initial = "## Features" not in plan_content or plan_content.count("TASK-") == 0
-        
-        if is_initial:
-            # Initial generation - study specs and create plan
-            prompt = (
-                "You are generating an IMPLEMENTATION_PLAN.md from specifications.\n"
-                "\n"
-                "## YOUR TASK\n"
-                "1. Study the specifications provided below\n"
-                "2. Identify core features and their requirements\n"
-                "3. Break features into concrete, actionable tasks\n"
-                "4. Output ONLY the plan in the specified format\n"
-                "\n"
-                "## PLANNING RULES\n"
-                "- Plan only — do NOT implement anything\n"
-                "- Concrete tasks — each task is a single, testable step\n"
-                "- Sequential IDs — FEAT-001, TASK-001, etc.\n"
-                "- Compute Plan Hash — SHA256 of sorted task IDs, first 10 chars\n"
-                "\n"
-                "## SOURCE SPECIFICATIONS\n"
-                "\n"
-            )
-            prompt += spec_content
-            prompt += (
-                "\n"
-                "\n"
-                "## OUTPUT FORMAT\n"
-                "\n"
-                "```markdown\n"
-                "# Implementation Plan\n"
-                "\n"
-                "**Project:** <name>\n"
-                "**Spec:** specs/ (contains multiple spec files)\n"
-                "**Mode:** PLANNING\n"
-                "\n"
-                "## Features\n"
-                "\n"
-                "### FEAT-001: <feature name>\n"
-                "- [ ] TASK-001: <concrete task description>\n"
-                "- [ ] TASK-002: <concrete task description>\n"
-                "\n"
-                "---\n"
-                "\n"
-                "**Plan Hash:** <10-char hash of sorted task IDs>\n"
-                "```\n"
-                "\n"
-                "## NOTES\n"
-                "- Tasks should be small enough to implement in one session\n"
-                "- Include: setup, core logic, error handling, edge cases, testing\n"
-                "- Each feature must have at least one task\n"
-                "\n"
-                "Output ONLY the plan markdown, nothing else.\n"
-            )
-        else:
-            # Refinement - compare current plan against specs, identify gaps
-            prompt = (
-                "You are refining an IMPLEMENTATION_PLAN.md based on specifications.\n"
-                "\n"
-                "## YOUR TASK\n"
-                "1. Review the current plan below\n"
-                "2. Compare it against the specifications\n"
-                "3. Identify gaps, missing tasks, or areas needing refinement\n"
-                "4. Update the plan to be comprehensive\n"
-                "\n"
-                "## CURRENT PLAN\n"
-                "\n"
-                "```\n"
-            )
-            prompt += plan_content
-            prompt += (
-                "\n"
-                "```\n"
-                "\n"
-                "## SOURCE SPECIFICATIONS\n"
-                "\n"
-                "```\n"
-            )
-            prompt += spec_content
-            prompt += (
-                "\n"
-                "```\n"
-                "\n"
-                "## REFINE INSTRUCTIONS\n"
-                "- Keep correct parts of the current plan\n"
-                "- Add missing features/tasks from the specs\n"
-                "- Remove redundant or completed items\n"
-                "- Ensure each task is concrete and actionable\n"
-                "- Check that all spec requirements are covered\n"
-                "\n"
-                "## OUTPUT FORMAT\n"
-                "\n"
-                "```markdown\n"
-                "# Implementation Plan\n"
-                "\n"
-                "**Project:** <name>\n"
-                "**Spec:** specs/ (contains multiple spec files)\n"
-                "**Mode:** PLANNING\n"
-                "\n"
-                "## Features\n"
-                "\n"
-                "### FEAT-001: <feature name>\n"
-                "- [ ] TASK-001: <task>\n"
-                "\n"
-                "---\n"
-                "\n"
-                "**Plan Hash:** <10-char hash>\n"
-                "```\n"
-                "\n"
-                "## IMPORTANT\n"
-                "- Output ONLY the plan markdown\n"
-                "- Do NOT include explanations or commentary\n"
-                "- Re-compute the Plan Hash for the updated task list\n"
-                "\n"
-                "Output only the plan.\n"
-            )
-        
-        return prompt
-
-    def _compute_content_hash(self, content: str) -> str:
-        """Compute a simple hash of the plan content for stability detection."""
-        import hashlib
-        return hashlib.sha256(content.encode()).hexdigest()[:10]
-
-    def _extract_summary(self, plan_content: str) -> dict[str, Any]:
-        """Extract a summary from the plan content."""
-        project = ""
-        for line in plan_content.splitlines():
-            m = re.match(r"^\*\*Project:\*\*\s*(.+)$", line)
-            if m:
-                project = m.group(1).strip()
-                break
-
-        feature_count = len(re.findall(r"^### (FEAT-\d+):", plan_content, re.MULTILINE))
-        task_count = len(re.findall(r"^- \[ \] (TASK-\d+):", plan_content, re.MULTILINE))
-
-        return {
-            "project": project,
-            "feature_count": feature_count,
-            "task_count": task_count,
-        }
+    def _extract_feature_ids(self, content: str) -> list[str]:
+        """Extract feature IDs from plan content."""
+        return re.findall(r"(FEAT-\d+)", content)
 
 
 # --------------------------------------------------------------------
@@ -393,56 +301,53 @@ def handle_plan(args) -> dict:
     spec_path = Path(args.spec)
     output_path = Path(getattr(args, "output", None) or "IMPLEMENTATION_PLAN.md")
     max_iterations = getattr(args, "max_iterations", 10) or 10
-    pi_skill = getattr(args, "pi_skill", None) or "plan"
     force = getattr(args, "force", False)
 
-    # 1. Validate spec path exists
     if not spec_path.exists():
         raise FileNotFoundError(f"Spec path not found: {spec_path}")
 
-    # 2. Collect spec content (file or directory)
+    # Collect spec content (for project name extraction only)
     if spec_path.is_dir():
         spec_files = sorted(spec_path.glob("*.md")) + sorted(spec_path.glob("*.json"))
         if not spec_files:
             raise RuntimeError(f"No spec files found in {spec_path}")
-        
         print(f"[plan] Found {len(spec_files)} spec(s) in {spec_path}:")
         for f in spec_files:
             print(f"[plan]   - {f.name}")
-        
         spec_contents = []
         for f in spec_files:
-            content = f.read_text()
-            spec_contents.append(f"--- {f.name} ---\n{content}")
-        
+            spec_contents.append(f"--- {f.name} ---\n{f.read_text()}")
         spec_content = "\n\n".join(spec_contents)
         spec_display = f"{spec_path}/ (contains {len(spec_files)} spec files)"
     else:
         spec_content = spec_path.read_text()
         spec_display = str(spec_path)
 
-    # 3. Check output path doesn't exist (unless --force)
+    # Load existing plan if present (for incremental planning)
+    existing_plan_content = ""
+    if output_path.exists() and not force:
+        # If --force not set, we still need existing content for incremental planning
+        existing_plan_content = output_path.read_text()
+    elif output_path.exists() and force:
+        # With --force, start fresh but still read existing for context
+        existing_plan_content = output_path.read_text()
+
     if output_path.exists() and not force:
         raise RuntimeError(
-            f"Output file already exists: {output_path}. "
-            f"Use --force to overwrite."
+            f"Output file already exists: {output_path}. Use --force to overwrite."
         )
 
-    # Call PlanGenerator
     generator = PlanGenerator(
         max_iterations=max_iterations,
-        pi_skill=pi_skill,
         verbose=getattr(args, "verbose", False),
     )
 
-    result = generator.generate(spec_content, spec_display, output_path)
-
-    # Validate generated plan format
-    plan_content = output_path.read_text()
-    valid, errors = validate_format(plan_content)
-    if not valid:
-        error_lines = "\n  - ".join(errors[:10])
-        raise ValueError(f"Invalid plan format:\n  - {error_lines}")
+    result = generator.generate(
+        spec_content,
+        spec_display,
+        output_path,
+        existing_plan_content=existing_plan_content,
+    )
 
     return {
         "command": "plan",

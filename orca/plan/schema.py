@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Optional
 
 
@@ -30,8 +29,8 @@ FEAT_PATTERN = re.compile(r"^### (FEAT-\d+):\s*(.+)$")
 # Matches: `**Key:**` metadata lines
 METADATA_PATTERN = re.compile(r"^\*\*([^*]+):\*\*\s*(.+)$")
 
-# Matches: `**Plan Hash:** <hash>`
-PLAN_HASH_PATTERN = re.compile(r"^\*\*Plan Hash:\*\*\s*([a-f0-9]+)$")
+# Matches: `**Plan Hash:** <hash>` (allows any non-empty string after the colon)
+PLAN_HASH_PATTERN = re.compile(r"^\*\*Plan Hash:\*\*\s*(.+)$", re.IGNORECASE)
 
 # Matches the plan header
 PLAN_HEADER_PATTERN = re.compile(r"^#\s*Implementation\s+Plan\s*$", re.IGNORECASE)
@@ -362,16 +361,16 @@ def validate_format(content: str) -> tuple[bool, list[str]]:
     """
     errors: list[str] = []
     lines = content.splitlines()
-    
+
     # Find the header line (must be first non-empty line starting with #)
     header_found = False
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith('#'):
+        if stripped.startswith("#"):
             if "implementation" in stripped.lower() and "plan" in stripped.lower():
                 header_found = True
                 break
-    
+
     if not header_found:
         errors.append("Missing '# Implementation Plan' header")
 
@@ -379,10 +378,12 @@ def validate_format(content: str) -> tuple[bool, list[str]]:
     has_features = False
     for line in lines:
         stripped = line.strip()
-        if stripped.lower() == "## features" or stripped.lower().startswith("## features"):
+        if stripped.lower() == "## features" or stripped.lower().startswith(
+            "## features"
+        ):
             has_features = True
             break
-    
+
     if not has_features:
         errors.append("Missing '## Features' section")
 
@@ -414,18 +415,16 @@ def validate_format(content: str) -> tuple[bool, list[str]]:
             feature_ids_seen.add(feat_id)
 
     # Check separator and plan hash at end
-    # Find the last non-empty lines
-    non_empty_lines = [l for l in lines if l.strip()]
     has_separator = False
     has_plan_hash = False
-    
+
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith('---'):
+        if stripped.startswith("---"):
             has_separator = True
         if PLAN_HASH_PATTERN.match(line):
             has_plan_hash = True
-    
+
     if not has_separator:
         errors.append("Missing '---' separator before metadata footer")
 
