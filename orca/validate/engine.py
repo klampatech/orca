@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .templates import TestTemplate, load_template, format_task_test
+from .templates import TestTemplate, load_template
 from .generator import TestGenerator
 from .installer import DependencyInstaller
 
@@ -99,6 +99,7 @@ class ValidationEngine:
 
         if spec_path.suffix.lower() in (".yaml", ".yml"):
             import yaml
+
             return yaml.safe_load(content) or {}
         elif spec_path.suffix.lower() == ".json":
             return json.loads(content)
@@ -110,12 +111,13 @@ class ValidationEngine:
         """Parse task spec from markdown format."""
         import re
 
-        spec = {}
+        spec: dict = {}
 
         # Look for YAML frontmatter
         frontmatter_match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
         if frontmatter_match:
             import yaml
+
             spec = yaml.safe_load(frontmatter_match.group(1)) or {}
 
         # Look for key sections
@@ -123,7 +125,9 @@ class ValidationEngine:
         if task_id_match:
             spec["task_id"] = task_id_match.group(1).strip()
 
-        desc_match = re.search(r"##\s*Description\s*\n(.*?)(?=\n##|$)", content, re.DOTALL)
+        desc_match = re.search(
+            r"##\s*Description\s*\n(.*?)(?=\n##|$)", content, re.DOTALL
+        )
         if desc_match:
             spec["description"] = desc_match.group(1).strip()
 
@@ -233,10 +237,15 @@ class ValidationEngine:
 
                 if result.returncode != 0:
                     # Check for test failures vs actual errors
-                    if "error" in result.stdout.lower() or "error" in result.stderr.lower():
+                    if (
+                        "error" in result.stdout.lower()
+                        or "error" in result.stderr.lower()
+                    ):
                         errors.append("Test execution encountered errors")
                     else:
-                        errors.append("Some tests failed - implementation may be incomplete")
+                        errors.append(
+                            "Some tests failed - implementation may be incomplete"
+                        )
             elif framework == "jest":
                 result = subprocess.run(
                     ["npm", "test", "--", "--testPathPattern=" + task_id],
@@ -255,7 +264,7 @@ class ValidationEngine:
             errors.append(f"Validation error: {str(e)}")
 
         duration = time.time() - start_time
-        passed = len(errors) == 0 and test_output
+        passed = bool(len(errors) == 0 and test_output)
 
         return ValidationResult(
             passed=passed,

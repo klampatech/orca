@@ -1,6 +1,6 @@
 """orch plan — Generate an implementation plan from a spec file.
 
-Uses Claude Code with the same approach as Otto:
+Uses Claude Code with the same approach as Orca:
 1. Pass spec content + existing plan + instructions directly via -p (not temp file with relative paths)
 2. Refine existing IMPLEMENTATION_PLAN.md (don't recreate)
 3. Plan hash stability detection with PLAN_STABILITY_THRESHOLD=2
@@ -15,6 +15,8 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Set
+
+from ..utils.spinner import WhaleSpinner
 
 
 PLAN_PROMPT_TEMPLATE = """
@@ -140,7 +142,8 @@ class PlanGenerator:
             )
 
             # Run Claude Code with context directly in prompt
-            plan_content = self._call_claude(prompt)
+            with WhaleSpinner(f"Planning iteration {i}/{self.max_iterations}", interval=0.12):
+                plan_content = self._call_claude(prompt)
             if not plan_content:
                 if self.verbose:
                     print("[plan] No content returned, trying again...")
@@ -159,7 +162,7 @@ class PlanGenerator:
             # Write plan for this iteration
             output_path.write_text(plan_content)
 
-            # Check FILE hash stability (md5 like Otto) - printed for debugging
+            # Check FILE hash stability (md5 like Orca) - printed for debugging
             current_hash = self._file_hash(str(output_path))
 
             # Semantic stability: same task IDs = stable plan content
@@ -267,7 +270,7 @@ class PlanGenerator:
         return stripped.strip()
 
     def _file_hash(self, filepath: str) -> str:
-        """Compute md5 hash of file (like Otto's md5 -q)."""
+        """Compute md5 hash of file (like Orca's md5 -q)."""
         with open(filepath, "r") as f:
             return hashlib.md5(f.read().encode()).hexdigest()
 
@@ -345,6 +348,7 @@ def handle_plan(args) -> dict:
     result = generator.generate(
         spec_content,
         spec_display,
+        str(spec_path),  # Use actual path, not display string
         output_path,
         existing_plan_content=existing_plan_content,
     )

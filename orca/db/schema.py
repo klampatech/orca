@@ -17,9 +17,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     result_summary  TEXT,
     parent_id       TEXT REFERENCES tasks(id),
     root_spec_path  TEXT,
-    ir_snippet      TEXT,  -- JSON IR section for this task (Phase 1 IR validator)
+    ir_snippet      TEXT,
     CHECK (status IN ('available', 'claimed', 'completed', 'failed',
-                      'validation', 'blocked'))  -- Phase 2: validation, blocked
+                      'validation', 'blocked'))
 );
 
 CREATE TABLE IF NOT EXISTS task_runs (
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS hidden_scenario_runs (
     id                  TEXT PRIMARY KEY,
     feature_id          TEXT NOT NULL REFERENCES tasks(id),
     loop_id             TEXT,
-    generated_at        TEXT NOT NULL DEFAULT (datetime(utcnow())),
+    generated_at        TEXT NOT NULL,
     scenarios_found     INTEGER NOT NULL DEFAULT 0,
     scenarios_passed    INTEGER NOT NULL DEFAULT 0,
     scenarios_failed    INTEGER NOT NULL DEFAULT 0,
@@ -56,19 +56,40 @@ CREATE TABLE IF NOT EXISTS hidden_scenario_runs (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_avail ON tasks(priority DESC, created_at ASC) WHERE status = 'available';
--- idx_tasks_claimable: fast claim excluding children of validation roots
-CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks(priority DESC, created_at ASC)
-    WHERE status = 'available'
-      AND (parent_id IS NULL
-           OR parent_id NOT IN (SELECT id FROM tasks WHERE status = 'validation'));
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_expire ON task_runs(heartbeat_at) WHERE completed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hsr_feature ON hidden_scenario_runs(feature_id);
 CREATE INDEX IF NOT EXISTS idx_hsr_generated ON hidden_scenario_runs(generated_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks(priority DESC, created_at ASC)
-    WHERE status = 'available'
-      AND (parent_id IS NULL
-           OR parent_id NOT IN (SELECT id FROM tasks WHERE status = 'validation'));
 """
 
-HEARTBEAT_TIMEOUT_SECONDS = 300  # 5 minutes to handle long-running tasks
+HEARTBEAT_TIMEOUT_SECONDS = 300  # 5 minutes
+
+
+def init_db_schema(conn):
+    """Initialize database schema with version detection.
+
+    Creates additional indexes based on SQLite version capabilities.
+    Note: Subqueries in partial indexes are not supported in this SQLite build.
+
+    Args:
+        conn: Active SQLite connection.
+    """
+    import sqlite3
+
+    # Get SQLite version
+    version = sqlite3.sqlite_version
+    major, minor = map(int, version.split(".")[:2])
+
+    # Note: Even with SQLite 3.35+, subqueries in partial indexes are disabled
+    # in this Python/SQLite build. Using simpler fallback index.
+    #
+    # The claim_task logic in models/task.py handles filtering out children
+    # of validation tasks at the application layer instead of the database layer.
+    try:
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_claimable ON tasks(priority DESC, created_at ASC)
+            WHERE status = 'available' AND parent_id IS NULL
+        """)
+    except Exception:
+        # Index may already exist from previous init
+        pass

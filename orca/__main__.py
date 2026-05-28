@@ -177,6 +177,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeout for pi invocations in seconds (default: unlimited)"
     )
     loop.add_argument(
+        "--test-timeout", type=int, default=120,
+        help="Timeout for test invocations in seconds (default: 120)"
+    )
+    loop.add_argument(
+        "--no-verify", action="store_true",
+        help="Skip test verification entirely"
+    )
+    loop.add_argument(
         "--spec-only", action="store_true",
         help="Add spec file path to prompt"
     )

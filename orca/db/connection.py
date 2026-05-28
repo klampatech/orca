@@ -36,6 +36,14 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
+
+    # Register utcnow as SQLite function
+    def _utcnow_sqlite():
+        from ..utils.time import utcnow
+
+        return utcnow()
+
+    conn.create_function("utcnow", 0, _utcnow_sqlite)
     return conn
 
 
@@ -47,7 +55,7 @@ def init_database(db_path: Optional[Path] = None) -> Path:
     Returns:
         The path to the created database file.
     """
-    from .schema import INIT_SQL
+    from .schema import INIT_SQL, init_db_schema
 
     if db_path is None:
         db_path = get_db_path()
@@ -57,6 +65,7 @@ def init_database(db_path: Optional[Path] = None) -> Path:
 
     conn = sqlite3.connect(str(db_path))
     conn.executescript(INIT_SQL)
+    init_db_schema(conn)  # Add version-specific indexes
     conn.close()
 
     return db_path

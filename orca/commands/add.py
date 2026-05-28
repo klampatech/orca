@@ -3,7 +3,7 @@
 import shutil
 from pathlib import Path
 
-from ..db.connection import get_orch_dir, get_connection
+from ..db.connection import get_orch_dir
 from ..models.task import create_task
 
 
@@ -26,7 +26,9 @@ def handle_add(args) -> dict:
         if Path(spec_path).exists():
             task_dir = get_orch_dir() / "tasks"
             task_dir.mkdir(parents=True, exist_ok=True)
-            dest = task_dir / f"{args.description[:32]}.spec"  # will be overwritten by task id
+            dest = (
+                task_dir / f"{args.description[:32]}.spec"
+            )  # will be overwritten by task id
             shutil.copy(spec_path, dest)
             spec_path = str(dest)
 

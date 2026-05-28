@@ -1,6 +1,6 @@
 """Pre-commit hook for functional validation."""
 
-import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -66,7 +66,10 @@ def run_pre_commit_validation(commit_msg: str | None = None) -> bool:
     # Check if orca is available
     orca_path = shutil.which("orca")
     if not orca_path:
-        print("warning: 'orca' command not found in PATH, skipping validation", file=sys.stderr)
+        print(
+            "warning: 'orca' command not found in PATH, skipping validation",
+            file=sys.stderr,
+        )
         return True
 
     # Get staged files

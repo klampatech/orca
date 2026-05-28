@@ -40,7 +40,8 @@ def handle_metrics(args) -> dict[str, Any]:
     by_status = dict(by_status_rows)
 
     # Duration stats for completed tasks
-    duration_row = conn.execute("""
+    duration_row = conn.execute(
+        """
         SELECT
             AVG(julianday(completed_at) - julianday(claimed_at)) * 86400 as avg_seconds,
             MIN(julianday(completed_at) - julianday(claimed_at)) * 86400 as min_seconds,
@@ -50,7 +51,9 @@ def handle_metrics(args) -> dict[str, Any]:
           AND completed_at IS NOT NULL
           AND claimed_at IS NOT NULL
           AND (? = '' OR t.root_spec_path = ?)
-    """, (str(spec_path) if spec_path else "", str(spec_path) if spec_path else "")).fetchone()
+    """,
+        (str(spec_path) if spec_path else "", str(spec_path) if spec_path else ""),
+    ).fetchone()
 
     # Loop activity
     active_loops_row = conn.execute("""
@@ -79,13 +82,21 @@ def handle_metrics(args) -> dict[str, Any]:
         "total_tasks": total,
         "by_status": by_status_verbose,
         "duration_seconds": {
-            "avg": round(duration_row[0], 1) if duration_row and duration_row[0] else None,
-            "min": round(duration_row[1], 1) if duration_row and duration_row[1] else None,
-            "max": round(duration_row[2], 1) if duration_row and duration_row[2] else None,
+            "avg": round(duration_row[0], 1)
+            if duration_row and duration_row[0]
+            else None,
+            "min": round(duration_row[1], 1)
+            if duration_row and duration_row[1]
+            else None,
+            "max": round(duration_row[2], 1)
+            if duration_row and duration_row[2]
+            else None,
         },
         "active_loops": active_loops,
         "throughput_tasks_per_second": (
-            round(total / duration_row[0], 2) if duration_row and duration_row[0] and duration_row[0] > 0 else None
+            round(total / duration_row[0], 2)
+            if duration_row and duration_row[0] and duration_row[0] > 0
+            else None
         ),
         "hidden_scenario_runs": {
             "total_runs": hsr_row[0] or 0,
@@ -93,7 +104,9 @@ def handle_metrics(args) -> dict[str, Any]:
             "passed": hsr_row[2] or 0,
             "failed": hsr_row[3] or 0,
             "errored": hsr_row[4] or 0,
-        } if hsr_row else None,
+        }
+        if hsr_row
+        else None,
     }
 
 

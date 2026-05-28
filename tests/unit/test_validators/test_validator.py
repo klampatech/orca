@@ -117,7 +117,7 @@ class TestSpecIRValidator:
         assert errors == []
 
     def test_validate_missing_required_project(self, validator, valid_ir):
-        """Should fail if required 'project' field is missing."""
+        """Should fail if required project field is missing."""
         del valid_ir["project"]
 
         valid, errors = validator.validate(valid_ir)
@@ -126,7 +126,7 @@ class TestSpecIRValidator:
         assert len(errors) > 0
 
     def test_validate_missing_required_core_features(self, validator, valid_ir):
-        """Should fail if required 'coreFeatures' field is missing."""
+        """Should fail if required coreFeatures field is missing."""
         del valid_ir["coreFeatures"]
 
         valid, errors = validator.validate(valid_ir)
@@ -150,3 +150,213 @@ class TestSpecIRValidator:
 
         assert valid is True
         assert errors == []
+
+    def test_validate_language_with_version(self, validator):
+        """Should accept language with version like Python 3.11+."""
+        ir = {
+            "project": {
+                "name": "Test",
+                "vision": "Test project with versioned language that needs at least 50 chars",
+                "targetUsers": "developers",
+                "problemStatement": "testing",
+                "successCriteria": "pass"
+            },
+            "coreFeatures": {
+                "mustHave": [
+                    {
+                        "id": "FEAT-001",
+                        "description": "Feature with versioned language",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-001/AC-001", "criterion": "Given test When action Then result"}]
+                        }
+                    },
+                    {
+                        "id": "FEAT-002",
+                        "description": "Second feature for completeness",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-002/AC-001", "criterion": "Given test2 When action2 Then result2"}]
+                        }
+                    },
+                    {
+                        "id": "FEAT-003",
+                        "description": "Third feature for completeness check",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-003/AC-001", "criterion": "Given test3 When action3 Then result3"}]
+                        }
+                    }
+                ]
+            },
+            "technicalApproach": {
+                "language": "Python 3.11+",
+                "architecture": "monolith"
+            },
+            "testingStrategy": {
+                "unitTests": {"covered": True},
+                "integrationTests": {"covered": True},
+                "antiCheating": ["test"]
+            },
+            "acceptanceCriteria": {"happyPath": [], "errorHandling": []}
+        }
+        valid, errors = validator.validate(ir)
+        assert valid is True
+
+    def test_validate_architecture_descriptive(self, validator):
+        """Should accept descriptive architecture strings."""
+        ir = {
+            "project": {
+                "name": "Test",
+                "vision": "Test project with descriptive architecture string for validation",
+                "targetUsers": "developers",
+                "problemStatement": "testing",
+                "successCriteria": "pass"
+            },
+            "coreFeatures": {
+                "mustHave": [
+                    {
+                        "id": "FEAT-001",
+                        "description": "Feature with descriptive architecture",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-001/AC-001", "criterion": "Given test When action Then result"}]
+                        }
+                    },
+                    {
+                        "id": "FEAT-002",
+                        "description": "Second feature for completeness",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-002/AC-001", "criterion": "Given test2 When action2 Then result2"}]
+                        }
+                    },
+                    {
+                        "id": "FEAT-003",
+                        "description": "Third feature for completeness check",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-003/AC-001", "criterion": "Given test3 When action3 Then result3"}]
+                        }
+                    }
+                ]
+            },
+            "technicalApproach": {
+                "language": "python",
+                "architecture": "Single-process orchestration with shell-pipe architecture to pi CLI"
+            },
+            "testingStrategy": {
+                "unitTests": {"covered": True},
+                "integrationTests": {"covered": True},
+                "antiCheating": ["test"]
+            },
+            "acceptanceCriteria": {"happyPath": [], "errorHandling": []}
+        }
+        valid, errors = validator.validate(ir)
+        assert valid is True
+
+    def test_validate_architecture_pipeline(self, validator):
+        """Should accept pipeline-like architectures."""
+        ir = {
+            "project": {
+                "name": "Test",
+                "vision": "Test project with pipeline architecture string for validation",
+                "targetUsers": "developers",
+                "problemStatement": "testing",
+                "successCriteria": "pass"
+            },
+            "coreFeatures": {
+                "mustHave": [
+                    {
+                        "id": "FEAT-001",
+                        "description": "Feature with pipeline architecture",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-001/AC-001", "criterion": "Given test When action Then result"}]
+                        }
+                    },
+                    {
+                        "id": "FEAT-002",
+                        "description": "Second feature for completeness",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-002/AC-001", "criterion": "Given test2 When action2 Then result2"}]
+                        }
+                    },
+                    {
+                        "id": "FEAT-003",
+                        "description": "Third feature for completeness check",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-003/AC-001", "criterion": "Given test3 When action3 Then result3"}]
+                        }
+                    }
+                ]
+            },
+            "technicalApproach": {
+                "language": "python",
+                "architecture": "Sequential pipeline orchestrating pi CLI invocations"
+            },
+            "testingStrategy": {
+                "unitTests": {"covered": True},
+                "integrationTests": {"covered": True},
+                "antiCheating": ["test"]
+            },
+            "acceptanceCriteria": {"happyPath": [], "errorHandling": []}
+        }
+        valid, errors = validator.validate(ir)
+        assert valid is True
+
+    def test_validate_anti_cheating_missing(self, validator):
+        """Should warn when anti-cheating measures are missing for multi-feature projects."""
+        ir = {
+            "project": {
+                "name": "Test",
+                "vision": "Test project",
+                "targetUsers": "developers",
+                "problemStatement": "testing",
+                "successCriteria": "pass"
+            },
+            "coreFeatures": {
+                "mustHave": [
+                    {
+                        "id": "FEAT-001",
+                        "description": "First feature",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-001/AC-001", "criterion": "Given test When action Then result"}]
+                        }
+                    },
+                    {
+                        "id": "FEAT-002",
+                        "description": "Second feature",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-002/AC-001", "criterion": "Given test2 When action2 Then result2"}]
+                        }
+                    },
+                    {
+                        "id": "FEAT-003",
+                        "description": "Third feature",
+                        "edgeCases": ["test"],
+                        "acceptanceCriteria": {
+                            "happyPath": [{"id": "FEAT-003/AC-001", "criterion": "Given test3 When action3 Then result3"}]
+                        }
+                    }
+                ]
+            },
+            "technicalApproach": {
+                "language": "python",
+                "architecture": "monolith"
+            },
+            "testingStrategy": {
+                "unitTests": {"covered": True},
+                "integrationTests": {"covered": True},
+                "e2eTests": {"covered": True}
+            },
+            "acceptanceCriteria": {"happyPath": [], "errorHandling": []}
+        }
+        valid, errors = validator.validate(ir)
+        # Should have anti-cheating warning
+        error_fields = [e.field for e in errors]
+        assert "testingStrategy.antiCheating" in error_fields

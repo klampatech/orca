@@ -39,7 +39,7 @@ def handle_claim(args) -> dict:
 
 def format_claim_human(result: dict) -> str:
     if result["status"] == "empty":
-        return f"No available tasks in backlog"
+        return "No available tasks in backlog"
 
     spec_note = f"\n  Spec: {result['spec_path']}" if result.get("spec_path") else ""
     return (

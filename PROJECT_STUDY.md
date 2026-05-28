@@ -1,978 +1,811 @@
-# Project Study: Orca Orchestrator
+# Orca Orchestrator - Comprehensive Project Study
 
-**Study Date:** 2026-04-22  
-**Project Type:** CLI Tool / Task Queue System  
-**Status:** Phase 1 Complete, Phase 2 Partially Implemented
+**Date:** May 15, 2026  
+**Project Location:** `/Users/kylelampa/Development/orca`  
+**Project Type:** Python CLI Tool / Task Orchestration System  
+**Language:** Python 3.10+  
+**Agents Used:** 10 specialized explorer agents (all completed successfully)
 
 ---
 
 ## Executive Summary
 
-Orca is a lightweight, zero-dependency task orchestration system designed for running and managing agent-based workflows (particularly for the pi coding agent). It uses SQLite as a persistent task queue with a heartbeat-based crash detection mechanism. The system operates as a CLI tool where loops execute tasks in isolated subprocesses, with atomic task claiming ensuring no duplicate work. While Phase 1 functionality is complete, several Phase 2 features remain unimplemented, including parallel loop spawning, hidden scenario validation, and the HTTP API server.
+The **Orca Orchestrator** is a shared task coordination system for multiple autonomous Ralph loops running on the same machine. It provides a robust framework for managing task backlogs, atomic task claiming, heartbeat-based stale task recovery, and hierarchical feature trees with validation phases.
 
-**Key Characteristics:**
-- **Minimalist Design:** Zero external Python dependencies, uses stdlib only
-- **Persistent Queue:** SQLite with WAL mode for concurrent reads
-- **Crash-Resilient:** Heartbeat pattern detects failed loops within 5 minutes
-- **Single-User CLI:** No authentication, designed for individual developer use
-- **pi Integration:** Delegates actual task execution to the pi agent via subprocess
+### Key Characteristics
+
+| Attribute | Value |
+|-----------|-------|
+| **Project Type** | Python CLI Tool (Task Orchestration) |
+| **Language** | Python 3.10+ |
+| **Dependencies** | Zero runtime dependencies (stdlib only) |
+| **Database** | SQLite with WAL mode |
+| **CLI Framework** | argparse (stdlib) |
+| **Quality Tools** | ruff, mypy, pytest |
+| **Architecture** | Command-based with plugin-style modules |
+
+### High-Level Assessment
+
+| Dimension | Status | Notes |
+|-----------|--------|-------|
+| Architecture | ✅ Excellent | Clear separation, well-organized modules |
+| Data Layer | ✅ Robust | SQLite WAL, proper schema design |
+| API/CLI | ✅ Functional | Comprehensive command set |
+| Security | ✅ Solid | SQLite sandboxed, no external deps |
+| Testing | ✅ Good | 52+ tests, integration coverage |
+| Deployment | ✅ Configured | GitHub Actions CI/CD |
+| Dependencies | ✅ Minimal | Zero runtime dependencies |
+| Code Quality | ✅ Excellent | ruff, mypy fully configured |
+| User Experience | ✅ Strong | Well-documented, clear CLI |
+| Performance | ✅ Efficient | SQLite WAL, atomic operations |
+
+### Key Strengths
+
+1. **Zero Runtime Dependencies** — Uses only Python standard library, easy to deploy
+2. **Atomic Task Claiming** — SQLite `BEGIN IMMEDIATE` prevents race conditions
+3. **Comprehensive Validation** — Multi-phase IR validation with detailed error messages
+4. **Heartbeat Mechanism** — Automatic stale task recovery after 5 minutes
+5. **Phase 2 Hidden Scenario Validation** — Adversarial test generation for spec gap detection
+6. **Excellent Code Quality** — Full ruff, mypy, pytest integration with high coverage
+7. **Well-Documented** — Comprehensive README with examples and troubleshooting
+
+### Key Areas for Improvement
+
+1. **E2E Test Coverage** — Integration tests present but no end-to-end CLI tests
+2. **Loop Model Tests** — Task model tested, Loop model tests not yet implemented
+3. **HTTP API** — `serve` command mentioned but not fully utilized
+4. **Metrics Dashboard** — Basic metrics exist, no visualization
 
 ---
 
-## Project Overview
+## 1. Technical Architecture
 
-### Purpose
-
-Orca solves the problem of orchestrating long-running agent tasks that need to survive terminal disconnections, maintain state persistence, and avoid duplicate work. It's designed as a task queue manager for AI coding agents, providing reliability and observability for complex multi-step workflows.
-
-### Core Functionality
-
-1. **Task Management**
-   - Persistent SQLite-backed task queue
-   - Atomic task claiming (no duplicates via `BEGIN IMMEDIATE`)
-   - Task state tracking with timestamps and metadata
-
-2. **Loop Execution**
-   - Spawns subprocess loops for task execution
-   - Heartbeat mechanism for crash detection (5-minute timeout)
-   - Loop metadata persistence (created, updated, status)
-
-3. **pi Agent Integration**
-   - Delegates task execution to the pi CLI
-   - Supports TDD workflow instructions
-   - Multi-runtime test detection (pytest, npm, go, rspec)
-
-4. **Output Modes**
-   - Human-readable ASCII formatted output
-   - JSON output for programmatic consumption
-
-### Target Users
-
-- **Individual Developers** using pi for coding tasks
-- **Teams** running autonomous coding agents on shared infrastructure
-- **Research Environments** requiring reproducible agent execution logs
-
----
-
-## Technical Architecture
-
-### Stack Summary
-
-| Layer | Technology |
-|-------|------------|
-| Language | Python 3.x (stdlib only) |
-| Database | SQLite 3 (WAL mode) |
-| CLI Framework | argparse (stdlib) |
-| Process Management | subprocess, threading |
-| Integration | pi CLI (external) |
-
-### System Architecture Diagram
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        User Terminal                         │
-│                    $ orca <command>                          │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│                     Orca CLI (main)                          │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐  │
-│  │  Argparse   │  │   Commands   │  │  SQLite Connection  │  │
-│  │   Parser    │──│   Registry   │──│   (WAL, Immediate)  │  │
-│  └─────────────┘  └──────────────┘  └─────────────────────┘  │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┐
-          │               │               │
-          ▼               ▼               ▼
-    ┌──────────┐   ┌──────────┐   ┌──────────┐
-    │ Loop 1   │   │ Loop 2   │   │ Loop N   │
-    │ (subproc)│   │ (subproc)│   │ (subproc)│
-    │    │     │   │    │     │   │    │     │
-    │    ▼     │   │    ▼     │   │    ▼     │
-    │  pi CLI  │   │  pi CLI  │   │  pi CLI  │
-    │    │     │   │    │     │   │    │     │
-    │    ▼     │   │    ▼     │   │    ▼     │
-    │ Heartbeat│   │ Heartbeat│   │ Heartbeat│
-    └──────────┘   └──────────┘   └──────────┘
-          │               │               │
-          └───────────────┴───────────────┘
-                          │
-                          ▼
-              ┌─────────────────────┐
-              │   .orch/tasks.db    │
-              │   (SQLite/WAL)      │
-              │                     │
-              │  ┌───────────────┐  │
-              │  │    tasks      │  │
-              │  │  task_runs    │  │
-              │  │    loops      │  │
-              │  └───────────────┘  │
-              └─────────────────────┘
-```
-
-### Key Architectural Decisions
-
-| Decision | Rationale | Trade-offs |
-|----------|-----------|------------|
-| SQLite over Redis/Postgres | Zero dependencies, simple deployment | Limited concurrent write performance |
-| Heartbeat pattern | Detects crashes without shared state | ~80ms overhead per heartbeat |
-| Command pattern | Extensible CLI, modular commands | Requires boilerplate for each command |
-| Subprocess per loop | Isolation, crash containment | Higher memory footprint per loop |
-| WAL mode | Concurrent reads, durability | Requires periodic checkpoints |
-
-### Directory Structure
+### 1.1 System Overview
 
 ```
 orca/
-├── README.md                    # User documentation
-├── pyproject.toml               # Package configuration
-├── src/orca/
-│   ├── __init__.py
-│   ├── main.py                  # CLI entry point
-│   ├── db.py                    # Database initialization & queries
-│   ├── models.py                # Data models (Task, TaskRun, Loop)
-│   ├── commands/
-│   │   ├── __init__.py
-│   │   ├── status.py            # orca status command
-│   │   ├── clean.py             # orca clean command
-│   │   ├── log.py               # orca log command
-│   │   ├── tdd.py               # orca tdd command
-│   │   └── submit.py            # orca submit command
-│   └── utils/
-│       ├── __init__.py
-│       ├── output.py            # Human/JSON output formatting
-│       └── pi.py                # pi CLI subprocess wrapper
-├── tests/                       # (empty - no internal tests)
-└── docs/                         # (minimal documentation)
+├── commands/        # CLI command handlers (18+ commands)
+├── models/          # Data access layer (Task, TaskRun, Loop)
+├── db/              # Database schema & connections
+├── utils/           # Utilities (validator, identity, time, llm, logging)
+├── validate/        # Hidden scenario validation system
+├── plan/            # Implementation plan generation
+├── hooks/           # Git pre-commit integration
+└── __main__.py      # CLI entry point
+```
+
+### 1.2 Module Responsibilities
+
+| Module | Purpose | Key Files |
+|--------|---------|-----------|
+| **commands/** | CLI command implementations | init.py, add.py, claim.py, complete.py, loop.py, etc. |
+| **db/** | Database schema & connections | schema.py, connection.py |
+| **models/** | Data access layer | task.py, task_run.py, loop.py |
+| **utils/** | Utility functions | validator.py, identity.py, time.py, llm.py, logging.py |
+| **validate/** | Hidden scenario validation | generator.py, engine.py, templates.py, installer.py |
+| **plan/** | Implementation plan generation | parser.py, generator.py, schema.py |
+| **hooks/** | Git pre-commit integration | pre_commit.py |
+
+### 1.3 Design Patterns
+
+| Pattern | Usage | Implementation |
+|---------|-------|----------------|
+| **Command Pattern** | CLI commands | Each command in `commands/` extends functionality |
+| **Repository Pattern** | Data access | `models/task.py` wraps SQLite operations |
+| **Builder Pattern** | Plan generation | `plan/parser.py` builds task trees |
+| **Strategy Pattern** | Validation phases | Multiple validation passes in `utils/validator.py` |
+| **Factory Pattern** | Test fixtures | `conftest.py` provides test factories |
+
+### 1.4 Architecture Diagram
+
+```
+User Input (CLI)
+       │
+       ▼
+┌──────────────────┐
+│  __main__.py     │  ← Entry point
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  commands/      │  ← Command handlers
+│  - init         │
+│  - add          │
+│  - claim        │
+│  - complete     │
+│  - loop         │
+│  - etc.         │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐     ┌──────────────────┐
+│  models/         │────▶│  db/             │
+│  - task          │     │  - schema        │
+│  - task_run      │     │  - connection    │
+│  - loop          │     └────────┬─────────┘
+└────────┬─────────┘              │
+         │                        ▼
+         │              ┌──────────────────┐
+         │              │  SQLite WAL      │
+         │              │  .orch/orch.db   │
+         │              └──────────────────┘
+         │
+         ▼
+┌──────────────────┐
+│  validate/       │  ← Hidden scenario validation
+│  - generator     │
+│  - engine        │
+│  - templates     │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  plan/           │  ← Implementation plan generation
+│  - parser        │
+│  - generator     │
+└──────────────────┘
+```
+
+### 1.5 Task Lifecycle State Machine
+
+```
+available ────claim──────▶ claimed
+    ▲                          │
+    │                          ├──complete──▶ completed
+    │                          │
+    │                          ├──fail────────▶ failed
+    │                          │
+    │                          └──(last child)──▶ validation
+    │                                                    │
+    │                                                    ▼
+    │                                             ┌─────────┐
+    │                                             │ BLOCKED │
+    │                                             │ (tasks) │
+    │                                             └────┬────┘
+    │                                                  │
+    │               ┌─────────────────┐               │
+    │               │ hidden tasks   │◀──created──────┘
+    │               │ (if validation │
+    │               │  fails)        │
+    │               └─────────────────┘
+    │                          │
+    │                          ├──pass──▶ completed
+    │                          │
+    │                          └──fail──▶ more hidden tasks
+    │
+    ◀───────────────────reclaim─────────────────────┐
+                                                     │
+                    (after 5 min no heartbeat)        │
 ```
 
 ---
 
-## Data & Storage
+## 2. Data & Storage
 
-### Database Schema
-
-```sql
--- Core task management
-CREATE TABLE tasks (
-    id TEXT PRIMARY KEY,
-    prompt TEXT NOT NULL,
-    spec_path TEXT,
-    status TEXT DEFAULT 'pending',
-    created_at TEXT,
-    updated_at TEXT,
-    claimed_by TEXT,
-    claimed_at TEXT,
-    completed_at TEXT,
-    error TEXT,
-    result TEXT
-);
-
-CREATE TABLE task_runs (
-    id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL,
-    loop_id TEXT NOT NULL,
-    started_at TEXT,
-    ended_at TEXT,
-    exit_code INTEGER,
-    output TEXT,
-    FOREIGN KEY (task_id) REFERENCES tasks(id),
-    FOREIGN KEY (loop_id) REFERENCES loops(id)
-);
-
-CREATE TABLE loops (
-    id TEXT PRIMARY KEY,
-    created_at TEXT,
-    updated_at TEXT,
-    last_heartbeat TEXT,
-    status TEXT,
-    project_path TEXT
-);
-```
-
-### Data Flow
-
-```
-┌─────────────┐    submit     ┌─────────────┐    claim      ┌─────────────┐
-│   User CLI  │──────────────▶│    tasks    │──────────────▶│  Subprocess │
-│  orca submit│               │   (pending) │   IMMEDIATE   │    Loop     │
-└─────────────┘               └─────────────┘               └──────┬──────┘
-                                                                   │
-                    ┌─────────────┐    heartbeat    ┌─────────────▼──────┐
-                    │  .orch/     │◀────────────────│      loops         │
-                    │  tasks.db   │    UPDATE       │  (heartbeat time)   │
-                    └─────────────┘                 └─────────────────────┘
-                           │
-                           │ read
-                           ▼
-                    ┌─────────────┐    status query
-                    │  orca status│◀────────────────┌─────────────┐
-                    │   command   │────────────────│    User     │
-                    └─────────────┘   formatted    └─────────────┘
-```
-
-### Storage Characteristics
-
-| Aspect | Implementation | Notes |
-|--------|----------------|-------|
-| Mode | WAL (Write-Ahead Logging) | Concurrent reads, serialized writes |
-| Write Lock | `BEGIN IMMEDIATE` | Atomic claiming, potential bottleneck |
-| Heartbeat | 5-minute timeout | ~80ms subprocess overhead |
-| Location | `.orch/tasks.db` | Per-project directory |
-| Backup | Manual | No automated backups |
-
-### Missing Schema Elements (Phase 2)
-
-The following Phase 2 features are specified but not implemented:
-
-| Feature | Spec Location | Status |
-|---------|---------------|--------|
-| `hidden_scenario_runs` table | Phase 2 spec | Not in schema |
-| `validation` status state | Phase 2 spec | Not in schema |
-| `blocked` status state | Phase 2 spec | Not in schema |
-
----
-
-## API & Integrations
-
-### CLI Command Interface
-
-Orca is primarily a CLI tool with no HTTP API. Commands are registered via a decorator pattern:
-
-```python
-# Command registration pattern
-from orca.commands import register
-
-@register
-def status(args):
-    """Display task queue status"""
-    ...
-```
-
-**Implemented Commands:**
-
-| Command | Purpose | Status |
-|---------|---------|--------|
-| `orca status` | Show pending tasks and running loops | ✅ Implemented |
-| `orca clean` | Remove completed tasks and empty loops | ✅ Implemented |
-| `orca log` | Show output from specific loops | ✅ Implemented |
-| `orca tdd` | Start TDD workflow with pi | ✅ Implemented |
-| `orca submit` | Add new task to queue | ✅ Implemented |
-
-**Unimplemented Commands (Phase 2):**
-
-| Command | Purpose | Status |
-|---------|---------|--------|
-| `orca run` | Auto-chain task execution | ❌ Not implemented |
-| `orca loops` | Manage parallel loops (e.g., `orca loops N`) | ❌ Not implemented |
-| `orca validate-scenarios` | Hidden scenario validation | ❌ Not implemented |
-| `orca metrics` | Performance metrics | ❌ Not implemented |
-| `orca serve` | HTTP API server | ❌ Not implemented |
-
-### pi Integration
-
-Orca delegates all task execution to the pi CLI via subprocess:
-
-```python
-# pi.py - subprocess wrapper
-def run_pi(prompt, spec_path, project_path, tdd_mode=False):
-    cmd = ["pi", "impl", prompt]
-    if spec_path:
-        cmd.extend(["--spec", spec_path])
-    if tdd_mode:
-        cmd.append("--tdd")
-    return subprocess.run(cmd, ...)
-```
-
-**Integration Points:**
-- `orca tdd` passes TDD instructions to pi
-- Test detection across pytest/npm/go/rspec
-- Results captured and stored in task_runs
-
-### Output Formats
-
-**Human Mode (default):**
-```
-┌────────────────────────────────────────────────────────────┐
-│ Loop: abc-123 (PID 45678)                                  │
-│ Created: 2026-04-22 10:30:00 | Last heartbeat: 10:35:00    │
-│ Status: running | Project: /path/to/project               │
-└────────────────────────────────────────────────────────────┘
-```
-
-**JSON Mode (`--json`):**
-```json
-{
-  "loops": [
-    {
-      "id": "abc-123",
-      "pid": 45678,
-      "created_at": "2026-04-22T10:30:00",
-      "last_heartbeat": "2026-04-22T10:35:00",
-      "status": "running",
-      "project_path": "/path/to/project"
-    }
-  ]
-}
-```
-
----
-
-## Security
-
-### Security Model Overview
-
-Orca is designed as a **single-user CLI tool** with minimal attack surface. There is no authentication, authorization, or network exposure by default.
-
-### Security Implementation
-
-| Aspect | Implementation | Assessment |
-|--------|----------------|------------|
-| SQL Injection | Parameterized queries only | ✅ Protected |
-| Loop ID | UUID4 (random) | ✅ Unpredictable |
-| Access Control | SQLite file permissions | ⚠️ OS-level only |
-| Subprocess | Direct pi CLI execution | ⚠️ Trust pi implicitly |
-
-### Security Considerations
-
-**Current Protections:**
-- All SQL queries use parameterized `?` placeholders
-- Loop IDs are UUID4 (cryptographically random)
-- No external network requests from Orca itself
-
-**Potential Concerns:**
-- **No authentication** - Anyone with file access to `.orch/` can manipulate tasks
-- **No rate limiting** - Unlimited task submission
-- **No audit logging** - Task modifications not tracked
-- **Subprocess trust** - Orca trusts pi CLI completely
-- **SQLite permissions** - Access control relies entirely on OS file permissions
-
-### Recommended Hardening (If Multi-User)
-
-1. Implement authentication (token-based or OAuth)
-2. Add rate limiting per user
-3. Enable audit logging for all mutations
-4. Validate pi CLI integrity (hash verification)
-5. Consider PostgreSQL with row-level security for multi-tenant use
-
----
-
-## Testing & Quality
-
-### Testing Strategy
-
-Orca takes a **minimalist testing approach** by design:
-
-| Aspect | Current State | Recommendation |
-|--------|---------------|----------------|
-| Unit Tests | None | Add for core modules |
-| Integration Tests | Minimal | Test CLI commands |
-| Target Project Tests | Delegated to pi | User responsibility |
-| TDD Workflow | Supported via `orca tdd` | Document in README |
-
-### Test Coverage by Component
-
-| Component | Unit Tests | Integration Tests | Notes |
-|-----------|------------|------------------|-------|
-| `db.py` | ❌ | ❌ | Critical - needs tests |
-| `models.py` | ❌ | ❌ | Basic CRUD validation |
-| `commands/` | ❌ | ❌ | CLI smoke tests |
-| `utils/output.py` | ❌ | ⚠️ | Manual verification |
-| `utils/pi.py` | ❌ | ⚠️ | Mock pi for testing |
-
-### Testing Patterns Used
-
-**Multi-Runtime Test Detection (delegated to pi):**
-- Python: pytest, unittest
-- Node.js: npm test, jest
-- Go: go test
-- Ruby: rspec
-
-**SpecIRValidator:**
-- Located in pi integration
-- No unit tests in Orca codebase
-- Validates spec.ir.json format
-
-### Phase 2 Testing Gaps
-
-The following Phase 2 features lack testing infrastructure:
-
-| Feature | Test Requirements | Status |
-|---------|-------------------|--------|
-| Hidden scenario validation | Unit tests for validation logic | ❌ Not implemented |
-| Parallel loop management | Concurrent execution tests | ❌ Not implemented |
-| Feature tree locking | State transition tests | ❌ Not implemented |
-
----
-
-## Deployment & Operations
-
-### Installation
-
-Orca is distributed as a Python package:
-
-```bash
-# From source
-pip install -e .
-
-# Via pyproject.toml
-[project]
-name = "orca"
-version = "0.1.0"
-```
-
-### Deployment Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   Deployment Environment                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│   ┌──────────────┐         ┌──────────────┐                │
-│   │   Project A  │         │   Project B  │                │
-│   │   .orch/     │         │   .orch/     │                │
-│   │  tasks.db    │         │  tasks.db    │                │
-│   └──────────────┘         └──────────────┘                │
-│                                                              │
-│   ┌──────────────┐         ┌──────────────┐                │
-│   │   Loop 1-3   │         │   Loop 1-2   │                │
-│   │   (subproc)  │         │   (subproc)  │                │
-│   └──────────────┘         └──────────────┘                │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Operations Characteristics
-
-| Aspect | Current State | Notes |
-|--------|---------------|-------|
-| Installation | pip install | No containers, no Helm |
-| Per-project data | `.orch/` directory | Isolated databases |
-| Process management | Manual | User spawns/terminates |
-| CI/CD | None | No pipelines configured |
-| Cloud dependencies | None | Fully self-contained |
-| Logs | Per-loop log files | No centralized logging |
-
-### Manual Operations Required
-
-Users must manually handle:
-
-1. **Loop spawning** - `orca tdd` starts one loop at a time
-2. **Loop monitoring** - `orca status` for visibility
-3. **Loop cleanup** - `orca clean` for completed loops
-4. **Crash recovery** - Heartbeat timeout (5 min) before cleanup
-
-### Recommended Operational Improvements
-
-1. **Systemd service** - Auto-restart crashed loops
-2. **Log aggregation** - Centralized log collection
-3. **Health endpoint** - `/health` for monitoring
-4. **Metrics export** - Prometheus-compatible metrics
-5. **Graceful shutdown** - SIGTERM handling
-
----
-
-## Dependencies
-
-### Dependency Philosophy
-
-Orca follows a **zero-dependency** philosophy for Python packages, using only the Python standard library:
-
-```
-stdlib-only: sqlite3, argparse, subprocess, threading, json, uuid, datetime, pathlib
-```
-
-### External Dependencies
-
-| Tool | Purpose | Installation | Notes |
-|------|---------|--------------|-------|
-| `python` | Runtime | User-managed | 3.x required |
-| `pi` | Task execution | Separate install | Core dependency |
-| `pytest` | Testing (target) | User-managed | For pi test detection |
-
-### Dependency Table
-
-| Package | Version Constraint | Used For |
-|---------|-------------------|----------|
-| (none) | - | Python stdlib only |
-
-### Lock File
-
-**No lock file needed** - Zero Python dependencies means no pip freeze required.
-
-### Recommended Dependencies (Optional)
-
-For improved code quality, consider adding:
-
-```toml
-[project.optional-dependencies]
-dev = [
-    "ruff>=0.1.0",      #dev = [
-    "ruff>=0.1.0",      # Linting and formatting
-    "mypy>=1.0.0",      # Type checking
-    "pytest>=7.0.0",    # Testing
-    "pytest-cov>=4.0.0", # Coverage reporting
-]
-```
-
----
-
-## Code Quality
-
-### Current State
-
-Orca has **no formal code quality tooling** configured. The codebase relies on implicit standards and developer discipline.
-
-### Quality Tooling Status
-
-| Tool | Configured | Used | Notes |
-|------|------------|------|-------|
-| Linting (ruff, flake8, pylint) | ❌ | ❌ | Not configured |
-| Formatting (black, ruff) | ❌ | ❌ | Not configured |
-| Type Checking (mypy) | ❌ | ❌ | Not configured |
-| Pre-commit hooks | ❌ | ❌ | No hooks defined |
-| CI Quality Gates | ❌ | ❌ | No CI pipeline |
-
-### Existing Good Patterns
-
-Despite no formal tooling, the codebase exhibits several positive patterns:
-
-| Pattern | Implementation | Quality |
-|---------|----------------|---------|
-| Type hints | Used throughout `models.py`, `db.py` | ✅ Good |
-| Docstrings | Present in commands and utils | ✅ Good |
-| Naming conventions | Consistent snake_case | ✅ Good |
-| Error handling | Try/except blocks present | ✅ Adequate |
-| Constants | Uppercase in `utils/output.py` | ✅ Good |
-
-### Recommended Quality Configuration
-
-**ruff.toml:**
-```toml
-line-length = 88
-target-version = "py39"
-
-[lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
-ignore = ["E501"]  # Line length handled by formatter
-```
-
-**mypy.ini:**
-```ini
-[mypy]
-python_version = 3.9
-warn_return_any = True
-warn_unused_configs = True
-disallow_untyped_defs = True
-```
-
-**pre-commit.yaml:**
-```yaml
-repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.0
-    hooks:
-      - id: ruff
-      - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.0.0
-    hooks:
-      - id: mypy
-```
-
----
-
-## User Experience
-
-### CLI Interface
-
-Orca provides a clean command-line interface with dual output modes:
-
-### Command Reference
-
-| Command | Syntax | Purpose |
-|---------|--------|---------|
-| `status` | `orca status [--json]` | Show tasks and loops |
-| `submit` | `orca submit "<prompt>" [--spec path]` | Add task to queue |
-| `tdd` | `orca tdd [--loop-id ID] [--pi-args "..."]` | Start TDD loop |
-| `log` | `orca log <loop-id>` | Show loop output |
-| `clean` | `orca clean [--force]` | Remove completed items |
-
-### Output Modes
-
-**Human Mode (default):**
-- ASCII table formatting
-- Color-coded status indicators (proposed)
-- Readable timestamps
-- Concise summaries
-
-**JSON Mode (`--json`):**
-```bash
-orca status --json | jq '.loops[0].status'
-```
-
-### UX Strengths
+### 2.1 Database Architecture
 
 | Aspect | Implementation |
 |--------|----------------|
-| Clear error messages | Contextual error reporting |
-| Helpful defaults | Sensible argument defaults |
-| Human-readable output | ASCII formatting |
-| JSON mode | Programmatic consumption |
-| Comprehensive README | Troubleshooting section |
+| **Database** | SQLite with WAL mode |
+| **Location** | `.orch/orch.db` (per-project) |
+| **Schema** | 4 tables + indexes |
+| **Concurrency** | WAL journal mode with 5s busy timeout |
+| **Constraints** | Foreign keys enforced |
 
-### UX Gaps
+### 2.2 Schema Design
 
-| Feature | Current State | Recommendation |
-|---------|---------------|----------------|
-| Colors | None | Add `--color` flag |
-| Progress indicators | None | Add spinner for long operations |
-| Shell completion | None | Add bash/zsh/fish completion |
-| Help text | Basic | Expand with examples |
-| Interactive mode | None | Consider `orca watch` |
+```sql
+-- Tasks: Main task backlog with hierarchical support
+CREATE TABLE tasks (
+    id              TEXT PRIMARY KEY,
+    spec_path       TEXT,
+    description     TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'available',
+    priority        INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    claimed_at      TEXT,
+    completed_at    TEXT,
+    result_summary  TEXT,
+    parent_id       TEXT REFERENCES tasks(id),
+    root_spec_path  TEXT,
+    ir_snippet      TEXT,
+    CHECK (status IN ('available', 'claimed', 'completed', 'failed',
+                      'validation', 'blocked'))
+);
 
-### Getting Started
+-- Task Runs: Run history per task
+CREATE TABLE task_runs (
+    id              TEXT PRIMARY KEY,
+    task_id         TEXT NOT NULL REFERENCES tasks(id),
+    loop_id         TEXT NOT NULL,
+    claimed_at      TEXT NOT NULL,
+    heartbeat_at    TEXT NOT NULL,
+    completed_at    TEXT,
+    exit_status     INTEGER,
+    result_summary  TEXT
+);
 
-**Prerequisites:**
-```bash
-# Install Python 3.9+
-python --version
+-- Loops: Registered loop state
+CREATE TABLE loops (
+    id              TEXT PRIMARY KEY,
+    name            TEXT,
+    started_at      TEXT NOT NULL,
+    last_heartbeat_at TEXT NOT NULL,
+    current_task_id TEXT REFERENCES tasks(id)
+);
 
-# Install pi (separate)
-# See: https://github.com/.../pi
-
-# Install Orca
-pip install -e .
+-- Hidden Scenario Runs: HSV execution audit trail
+CREATE TABLE hidden_scenario_runs (
+    id                  TEXT PRIMARY KEY,
+    feature_id          TEXT NOT NULL REFERENCES tasks(id),
+    loop_id             TEXT,
+    generated_at        TEXT NOT NULL,
+    scenarios_found     INTEGER NOT NULL DEFAULT 0,
+    scenarios_passed    INTEGER NOT NULL DEFAULT 0,
+    scenarios_failed    INTEGER NOT NULL DEFAULT 0,
+    scenarios_errored   INTEGER NOT NULL DEFAULT 0,
+    duration_ms         INTEGER,
+    output_snippet      TEXT
+);
 ```
 
-**Basic Workflow:**
-```bash
-# 1. Navigate to project
-cd /path/to/project
+### 2.3 Key Indexes
 
-# 2. Start TDD loop
-orca tdd --pi-args "Implement user authentication"
+| Index | Purpose |
+|-------|---------|
+| `idx_tasks_status` | Filter by status |
+| `idx_tasks_avail` | Claim query ordering (priority DESC, created_at ASC) |
+| `idx_tasks_claimable` | Exclude validation-locked children |
+| `idx_task_runs_task_id` | Join task runs to tasks |
+| `idx_task_runs_expire` | Find stale heartbeat runs |
+| `idx_hsr_feature` | HSV lookups by feature |
+| `idx_hsr_generated` | Time-based HSV queries |
 
-# 3. Monitor status (separate terminal)
-orca status
+### 2.4 Data Access Layer
 
-# 4. View logs if needed
-orca log abc-123
+| Model | Responsibilities |
+|-------|-----------------|
+| **Task** | CRUD operations, claim logic, status transitions, parent/child relationships |
+| **TaskRun** | Run history tracking, heartbeat management, stale detection |
+| **Loop** | Loop registration, heartbeat updates, current task tracking |
+| **HiddenScenarioRun** | HSV execution logging, statistics aggregation |
 
-# 5. Clean up when done
-orca clean
+### 2.5 Atomic Claiming Implementation
+
+```python
+def claim_task(conn) -> str | None:
+    # BEGIN IMMEDIATE acquires write lock immediately
+    conn.execute("BEGIN IMMEDIATE")
+    
+    # SELECT is fast, no lock needed
+    row = conn.execute("""
+        SELECT id FROM tasks
+        WHERE status = 'available'
+          AND (parent_id IS NULL
+               OR parent_id NOT IN (SELECT id FROM tasks WHERE status = 'validation'))
+        ORDER BY priority DESC, created_at ASC
+        LIMIT 1
+    """).fetchone()
+    
+    if row is None:
+        conn.rollback()
+        return None
+    
+    # UPDATE now safe with lock held
+    conn.execute("UPDATE tasks SET status='claimed' WHERE id=?", (row[0],))
+    conn.commit()
+    return row[0]
 ```
 
 ---
 
-## Performance & Optimization
+## 3. API & Integrations
 
-### Performance Characteristics
+### 3.1 CLI Command Architecture
 
-| Metric | Current Value | Notes |
-|--------|---------------|-------|
-| Concurrent reads | Unlimited (WAL) | Good for status queries |
-| Concurrent writes | Serialized | `BEGIN IMMEDIATE` |
-| Heartbeat overhead | ~80ms/heartbeat | Subprocess spawn cost |
-| Max stable loops | ~10 | Degrades beyond this |
-| Write throughput | Limited | SQLite single-writer |
+| Command | Description | Status |
+|---------|-------------|--------|
+| `orca init` | Initialize orchestrator | ✅ |
+| `orca add <spec> <desc>` | Add task | ✅ |
+| `orca plan <spec.md>` | Generate implementation plan | ✅ |
+| `orca decompose <plan.md>` | Parse plan into task tree | ✅ |
+| `orca claim` | Claim highest-priority task | ✅ |
+| `orca heartbeat <task-id>` | Update heartbeat | ✅ |
+| `orca complete <task-id>` | Mark task complete | ✅ |
+| `orca fail <task-id>` | Mark task failed | ✅ |
+| `orca status` | Show all tasks | ✅ |
+| `orca list --status <state>` | Filter tasks | ✅ |
+| `orca reclaim` | Reclaim stale tasks | ✅ |
+| `orca log <task-id>` | Show task history | ✅ |
+| `orca info <task-id>` | Show task details | ✅ |
+| `orca loop [--claim-only]` | Spawn Ralph loop | ✅ |
+| `orca validate-scenarios <id>` | Run hidden scenario validation | ✅ |
+| `orca metrics` | Show loop metrics | ✅ |
+| `orca serve` | HTTP API (future) | ⚠️ |
 
-### Performance Bottlenecks
+### 3.2 JSON Output Support
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Performance Bottlenecks                   │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────────┐                                            │
-│  │ BEGIN       │ ◀── Serialized writes (primary bottleneck) │
-│  │ IMMEDIATE   │                                            │
-│  └──────┬──────┘                                            │
-│         │                                                   │
-│         ▼                                                   │
-│  ┌─────────────┐     ┌─────────────┐                        │
-│  │ Heartbeat   │────▶│ ~80ms/poll  │                        │
-│  │ Subprocess  │     │ overhead    │                        │
-│  └─────────────┘     └─────────────┘                        │
-│                                                              │
-│  ┌─────────────┐     ┌─────────────┐                        │
-│  │ Loop Count │────▶│ Degradation │                        │
-│  │ > 10       │     │ beyond 10    │                        │
-│  └─────────────┘     └─────────────┘                        │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+All commands support `--json` for machine-readable output:
+
+```bash
+orca --json claim
+# → {"task_id": "TASK-001", "description": "...", "status": "claimed"}
+
+orca --json status
+# → {"tasks": [...], "counts": {"available": 5, "claimed": 2, ...}}
 ```
 
-### Optimization Opportunities
+### 3.3 External Integrations
 
-| Area | Current | Optimization | Impact |
-|------|---------|--------------|--------|
-| Write contention | `BEGIN IMMEDIATE` | Batched writes | High |
-| Heartbeat overhead | Subprocess | Thread-based heartbeat | Medium |
-| Connection pooling | None | Connection reuse | Low-Medium |
-| WAL checkpointing | Auto | Manual checkpoints | Low |
-
-### Scaling Considerations
-
-**Current Limits:**
-- ~10 concurrent loops before degradation
-- Single SQLite database per project
-- No horizontal scaling capability
-
-**For Higher Scale:**
-1. Consider PostgreSQL with connection pooling
-2. Implement message queue (Redis, RabbitMQ)
-3. Add load balancer for multiple workers
-4. Consider distributed task queue (Celery, Dramatiq)
+| Integration | Method | Purpose |
+|-------------|--------|---------|
+| **pi CLI** | Subprocess | Spawn Ralph loops, run validation tests |
+| **Git** | CLI | Pre-commit hooks |
+| **pytest** | Subprocess | Execute hidden scenario tests |
+| **LLM APIs** | HTTP | Plan generation, validation test generation |
+| **File System** | stdlib | Spec reading, log writing |
 
 ---
 
-## Key Insights & Recommendations
+## 4. Security & Authentication
 
-### Strengths
+### 4.1 Security Architecture
 
-1. **Minimalist Architecture**
-   - Zero dependencies reduces maintenance burden
-   - Stdlib only means fast installation
-   - SQLite provides ACID guarantees without setup
+| Layer | Protection |
+|-------|------------|
+| **Database** | SQLite sandboxed to `.orch/` directory |
+| **Dependencies** | Zero runtime dependencies (no supply chain risk) |
+| **File Access** | Scoped to project directory |
+| **Shell Execution** | Sandboxed subprocess calls |
+| **Network** | Optional HTTP tool, user-configured |
 
-2. **Robust Task Management**
-   - Atomic claiming prevents duplicate work
-   - Heartbeat pattern detects crashes reliably
-   - Persistent state survives restarts
+### 4.2 Loop Identity Management
 
-3. **Clean Code Organization**
-   - Command pattern enables easy extension
-   - Clear separation of concerns
-   - Good use of type hints and docstrings
+| Source | Priority | Storage |
+|--------|----------|---------|
+| `--loop-id` argument | 1 (highest) | In-memory |
+| `ORCH_LOOP_ID` env var | 2 | In-memory |
+| `~/.orch/loop_id` file | 3 (default) | Persistent |
 
-4. **pi Integration**
-   - Seamless delegation to pi agent
-   - Multi-runtime test detection
-   - TDD workflow support
+### 4.3 Input Validation
 
-### Areas for Improvement
+- **Schema Validation** — All IR documents validated via `SpecIRValidator`
+- **Parameter Validation** — CLI arguments validated via argparse
+- **SQL Injection Prevention** — Parameterized queries exclusively
+- **Path Traversal** — File operations use `Path.resolve()`
 
-1. **Testing Infrastructure**
-   - No unit tests for critical paths
-   - No integration tests for CLI
-   - Missing test coverage metrics
+---
 
-2. **Code Quality Tools**
-   - No linting or formatting configured
-   - No type checking enforced
-   - No pre-commit hooks
+## 5. Testing & Quality
 
-3. **Operational Maturity**
-   - No CI/CD pipeline
-   - Manual process management
-   - No centralized logging
+### 5.1 Test Infrastructure
 
-4. **Phase 2 Completion**
-   - Parallel loop spawning incomplete
-   - Hidden scenario validation missing
-   - HTTP API not implemented
+| Framework | Usage | Status |
+|-----------|-------|--------|
+| **pytest** | Test runner | ✅ Configured |
+| **pytest-cov** | Coverage reporting | ✅ Configured |
+| **pytest-xdist** | Parallel execution | ✅ Installed |
+| **conftest.py** | Shared fixtures | ✅ Implemented |
 
-### Risks & Concerns
+### 5.2 Test Organization
+
+```
+tests/
+├── conftest.py              # Shared fixtures
+├── unit/
+│   ├── test_utils/
+│   │   ├── test_time.py     # 5 tests
+│   │   └── test_identity.py # 10 tests
+│   └── test_validators/
+│       └── test_validator.py # 8 tests
+├── integration/
+│   ├── test_db_connection.py # 15 tests
+│   └── test_task_model.py   # 14 tests
+└── e2e/
+    └── test_cli.py          # (Not implemented)
+```
+
+### 5.3 Coverage Analysis
+
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| `utils/time.py` | 5 | ✅ Complete |
+| `utils/identity.py` | 10 | ✅ Complete |
+| `utils/validator.py` | 8 | ✅ Complete |
+| `db/connection.py` | 15 | ✅ Integration |
+| `models/task.py` | 14 | ✅ Integration |
+| **Total** | **52+** | ✅ All passing |
+
+### 5.4 Quality Assurance Tools
+
+| Tool | Purpose | Configuration |
+|------|---------|---------------|
+| **ruff** | Linting & formatting | `ruff.toml`, `pyproject.toml` |
+| **mypy** | Type checking | `mypy.ini`, `pyproject.toml` |
+| **pytest** | Test execution | `pyproject.toml` |
+| **pytest-cov** | Coverage reports | `pyproject.toml` |
+
+---
+
+## 6. Deployment & Operations
+
+### 6.1 CI/CD Pipeline
+
+| Stage | Tool | Purpose |
+|-------|------|---------|
+| **Lint** | ruff | Code quality |
+| **Format** | ruff | Auto-format |
+| **Type Check** | mypy | Type safety |
+| **Test** | pytest | Test execution |
+| **Coverage** | pytest-cov | Coverage reports |
+
+### 6.2 Deployment Targets
+
+| Environment | Support | Notes |
+|-------------|---------|-------|
+| **Local Development** | ✅ | `pip install -e .` |
+| **pip/pipx** | ✅ | PyPI-ready package |
+| **GitHub Actions** | ✅ | CI/CD configured |
+| **Docker** | ❌ | Not configured |
+| **Serverless** | ❌ | Not applicable |
+
+### 6.3 Installation Methods
+
+```bash
+# From source (recommended)
+pip install /path/to/orca
+
+# For development
+pip install -e /path/to/orca
+pip install -e "/path/to/orca[dev]"
+
+# With pipx (global CLI)
+pipx install /path/to/orca
+```
+
+---
+
+## 7. Dependencies
+
+### 7.1 Dependency Philosophy
+
+Orca follows a **zero runtime dependencies** philosophy:
+- Uses only Python standard library
+- Dev dependencies for development tools only
+- Easy deployment without dependency management
+
+### 7.2 Runtime Dependencies
+
+| Package | Purpose | Status |
+|---------|---------|--------|
+| **stdlib** | All functionality | ✅ Complete |
+
+### 7.3 Development Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| ruff | Linting & formatting |
+| mypy | Type checking |
+| pytest | Test runner |
+| pytest-cov | Coverage reporting |
+| pytest-xdist | Parallel execution |
+
+---
+
+## 8. Code Quality
+
+### 8.1 TypeScript Configuration Equivalents (Python)
+
+| Setting | Tool | Value |
+|---------|------|-------|
+| **Target** | Python version | 3.10+ |
+| **Strict Mode** | mypy | `check_untyped_defs = true` |
+| **Line Length** | ruff | 100 |
+| **Import Sorting** | ruff | Enabled (`I`) |
+| **Error Handling** | ruff | `E`, `W`, `F` rules |
+
+### 8.2 Code Organization Metrics
+
+| Metric | Value |
+|--------|-------|
+| Total Python Files | ~50+ |
+| Commands | 18+ |
+| Utility Modules | 6+ |
+| Test Files | 10+ |
+| Test Coverage | 52+ tests |
+
+### 8.
+
+### 8.3 Technical Debt
+
+| Item | Impact | Effort to Fix |
+|------|--------|---------------|
+| E2E CLI tests not implemented | Medium | Medium |
+| Loop model tests not implemented | Medium | Low |
+| HTTP API (serve) incomplete | Low | Medium |
+| Metrics visualization | Low | Low |
+
+---
+
+## 9. User Experience
+
+### 9.1 CLI Interface
+
+| Feature | Status |
+|---------|--------|
+| Help Documentation | ✅ Complete |
+| Error Messages | ✅ Descriptive |
+| Progress Indicators | ✅ For long operations |
+| JSON Output | ✅ All commands |
+
+### 9.2 Developer Experience
+
+| Aspect | Status |
+|--------|--------|
+| Type Hints | ✅ Extensive |
+| IDE Integration | ✅ Full |
+| Documentation | ✅ Comprehensive README |
+| Examples | ✅ Multiple examples |
+| Debugging | ✅ Logging support |
+
+### 9.3 User Interaction Patterns
+
+| Pattern | Implementation |
+|--------|----------------|
+| Help Display | `--help` |
+| JSON Output | `--json` |
+| Verbose Mode | Default logging |
+| Error Handling | Descriptive messages with suggestions |
+
+---
+
+## 10. Performance & Optimization
+
+### 10.1 Performance Characteristics
+
+| Aspect | Value |
+|--------|-------|
+| **Startup Time** | Fast (minimal initialization) |
+| **Memory Usage** | Low (SQLite in-process) |
+| **I/O Operations** | Async-compatible design |
+| **Concurrency** | WAL mode for safe concurrent access |
+
+### 10.2 Optimization Features
+
+| Feature | Implementation |
+|--------|----------------|
+| **WAL Mode** | Concurrent reads while writing |
+| **Busy Timeout** | 5s timeout when DB is locked |
+| **Indexed Queries** | Optimized claim query |
+| **Connection Pooling** | Single connection per invocation |
+
+### 10.3 Scalability Considerations
+
+| Aspect | Current | Limit |
+|--------|---------|-------|
+| Concurrent Tasks | Sequential claiming | Unlimited with atomicity |
+| Large Plans | Memory-based | O(n) tasks, ~1000 |
+| API Rate Limits | Configurable | Provider-dependent |
+| Stale Task Detection | 5-minute heartbeat | Configurable |
+
+---
+
+## 11. Key Insights & Recommendations
+
+### 11.1 Strategic Priorities
+
+#### High Priority (Immediate Action)
+
+1. **Implement E2E CLI Tests**
+   - Create `tests/e2e/test_cli.py`
+   - Test full command flows
+   - Validate JSON output parsing
+
+2. **Complete Loop Model Tests**
+   - Add tests for `models/loop.py`
+   - Cover heartbeat updates
+   - Test current task tracking
+
+#### Medium Priority (1-3 months)
+
+3. **HTTP API Implementation**
+   - Complete `serve` command
+   - Add authentication layer
+   - Document API endpoints
+
+4. **Metrics Dashboard**
+   - Visual metrics display
+   - Historical trend analysis
+   - Export capabilities
+
+#### Low Priority (Future)
+
+5. **Docker Support**
+   - Add Dockerfile
+   - Docker Compose for local dev
+   - Cloud deployment guides
+
+### 11.2 Architecture Strengths
+
+1. **Clean Separation** — Well-organized modules with clear responsibilities
+2. **Zero Dependencies** — Minimal attack surface, easy deployment
+3. **Atomic Operations** — Race-condition-free task claiming
+4. **Type Safety** — Comprehensive mypy configuration
+5. **Test Coverage** — Solid unit and integration test coverage
+6. **Documentation** — Excellent README with troubleshooting
+
+### 11.3 Architecture Weaknesses
+
+1. **E2E Tests** — No end-to-end CLI tests
+2. **Loop Model Tests** — Not yet implemented
+3. **HTTP API** — Incomplete serve command
+4. **Metrics** — No visualization
+
+### 11.4 Risk Assessment
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| SQLite write contention | Medium | Monitor, consider batching |
-| No authentication | High (if multi-user) | Add auth if needed |
-| Untested code | Medium | Add tests before changes |
-| Phase 2 scope creep | Low | Prioritize core features |
+| No E2E tests | Medium | Implement `tests/e2e/test_cli.py` |
+| Loop model untested | Medium | Add unit tests for `models/loop.py` |
+| No HTTP API | Low | Complete serve command if needed |
+| No metrics dashboard | Low | Add visualization if needed |
 
 ---
 
-## Implementation Status (Spec vs Actual)
+## 12. Common Patterns & Conventions
 
-### Phase 1 Status: ✅ Complete
+### 12.1 Code Style
 
-| Feature | Spec | Implementation | Status |
-|---------|------|-----------------|--------|
-| Task queue | SQLite with WAL | `db.py` tasks table | ✅ |
-| Loop management | Subprocess + heartbeat | `commands/tdd.py` | ✅ |
-| CLI commands | argparse registry | `commands/*.py` | ✅ |
-| Output modes | Human/JSON | `utils/output.py` | ✅ |
-| pi integration | Subprocess wrapper | `utils/pi.py` | ✅ |
-| Crash detection | 5-min heartbeat | Threading heartbeat | ✅ |
-| TDD workflow | `--tdd` flag | `orca tdd` | ✅ |
+- **Formatting:** ruff format (double quotes, space indentation)
+- **Line Length:** 100 characters max
+- **Import Order:** isort (stdlib first, then third-party)
+- **Type Hints:** Required for public interfaces
 
-### Phase 2 Status: ⚠️ Partial (35%)
+### 12.2 Naming Conventions
 
-| Feature | Spec | Implementation | Status |
-|---------|------|-----------------|--------|
-| `orca run` | Auto-chain tasks | Not implemented | ❌ |
-| `orca loops N` | Parallel loops | Not implemented | ❌ |
-| `orca validate-scenarios` | Hidden validation | Not implemented | ❌ |
-| `hidden_scenario_runs` | New table | Not in schema | ❌ |
-| `validation` status | New state | Not in schema | ❌ |
-| `blocked` status | New state | Not in schema | ❌ |
-| `orca metrics` | Performance metrics | Not implemented | ❌ |
-| `orca serve` | HTTP API | Not implemented | ❌ |
-| Feature tree locking | Lock/unlock mechanism | Not implemented | ❌ |
+| Type | Pattern | Example |
+|------|---------|---------|
+| Modules | `snake_case.py` | `task_model.py` |
+| Classes | `PascalCase` | `TaskModel` |
+| Functions | `snake_case()` | `claim_task()` |
+| Constants | `UPPER_SNAKE_CASE` | `HEARTBEAT_TIMEOUT_SECONDS` |
+| Private | `_leading_underscore` | `_get_connection()` |
 
-### Phase 2 Roadmap Priority
+### 12.3 Project Structure
 
-| Priority | Feature | Rationale |
-|----------|---------|-----------|
-| P0 | `orca run` | Core functionality |
-| P0 | `orca loops N` | Parallel execution |
-| P1 | `hidden_scenario_runs` | Schema change |
-| P1 | `orca validate-scenarios` | Core Phase 2 feature |
-| P2 | `orca metrics` | Observability |
-| P2 | `orca serve` | API access |
-| P3 | Feature tree locking | Advanced feature |
-
----
-
-## Technical Debt
-
-| Item | Impact | Effort | Priority |
-|------|--------|--------|----------|
-| No unit tests | High | High | P1 |
-| No linting/config | Medium | Low | P1 |
-| No type checking | Medium | Medium | P2 |
-| SQLite write bottleneck | Medium | High | P2 |
-| Manual process management | Medium | Medium | P2 |
-| Missing Phase 2 features | High | High | P0 |
-| No CI/CD pipeline | Medium | Medium | P2 |
-| No shell completion | Low | Low | P3 |
-
----
-
-## Common Patterns & Conventions
-
-### Code Style
-- **Python style**: PEP 8 compliant (implicit)
-- **Line length**: 88 characters (ruff default)
-- **Indentation**: 4 spaces
-
-### Naming Conventions
-| Element | Pattern | Example |
-|---------|---------|---------|
-| Files | snake_case | `task_queue.py` |
-| Classes | PascalCase | `TaskQueue`, `LoopManager` |
-| Functions | snake_case | `get_pending_tasks` |
-| Variables | snake_case | `loop_id`, `task_count` |
-| Constants | UPPER_SNAKE | `DEFAULT_TIMEOUT` |
-| Private | _prefix | `_get_connection` |
-
-### Project Structure Conventions
 ```
-src/orca/           # Source code
-├── commands/       # CLI command implementations
-├── utils/          # Utility modules
-tests/              # Test files (currently empty)
-docs/               # Documentation
+orca/
+├── __main__.py          # CLI entry point (orca.__main__:main)
+├── commands/            # Command handlers
+│   ├── init.py          # orca init
+│   ├── add.py           # orca add
+│   ├── claim.py         # orca claim
+│   ├── complete.py      # orca complete
+│   ├── loop.py          # orca loop
+│   └── ...
+├── db/                  # Database layer
+│   ├── schema.py        # Schema definitions
+│   └── connection.py    # Connection management
+├── models/              # Data access layer
+│   ├── task.py         # Task model
+│   ├── task_run.py     # TaskRun model
+│   └── loop.py         # Loop model
+├── utils/               # Utilities
+│   ├── validator.py    # SpecIR validator
+│   ├── identity.py     # Loop ID resolution
+│   ├── time.py         # Time utilities
+│   ├── llm.py          # LLM client
+│   └── logging.py      # Logging utilities
+├── validate/            # Hidden scenario validation
+│   ├── generator.py    # Test generator
+│   ├── engine.py       # Execution engine
+│   ├── templates.py    # Test templates
+│   └── installer.py    # Test installer
+├── plan/                # Implementation plan
+│   ├── parser.py       # Plan parser
+│   ├── generator.py    # Plan generator
+│   └── schema.py       # Plan schema
+└── hooks/               # Git hooks
+    └── pre_commit.py   # Pre-commit hook
 ```
 
 ---
 
-## Important Files
+## 13. Getting Started Guide
 
-| File | Purpose | Key Functions |
-|------|---------|---------------|
-| `src/orca/main.py` | CLI entry point | `main()`, argument parsing |
-| `src/orca/db.py` | Database operations | `init_db()`, `claim_task()` |
-| `src/orca/models.py` | Data models | `Task`, `Loop`, `TaskRun` |
-| `src/orca/commands/status.py` | Status command | `handle_status()` |
-| `src/orca/commands/tdd.py` | TDD loop | `handle_tdd()` |
-| `src/orca/utils/output.py` | Output formatting | `format_table()`, `format_json()` |
-| `src/orca/utils/pi.py` | pi integration | `run_pi()` |
-| `pyproject.toml` | Package config | Dependencies, entry points |
-| `README.md` | User docs | Usage, troubleshooting |
+### 13.1 Prerequisites
+
+- **Python 3.10+** — Modern type annotation syntax
+- **SQLite 3.35+** — Included with Python stdlib
+- **pi CLI** — Required for `orca loop` (install separately)
+
+### 13.2 Local Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/orca.git
+cd orca
+
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# Initialize orchestrator
+orca init
+
+# Run quality checks
+ruff check orca/
+ruff format orca/
+mypy orca/
+
+# Run tests
+pytest tests/
+```
+
+### 13.3 Key Commands
+
+| Command | Purpose |
+|---------|---------|
+| `orca init` | Initialize in current directory |
+| `orca add <desc>` | Add a task |
+| `orca claim` | Claim highest-priority task |
+| `orca complete <id>` | Mark task complete |
+| `orca status` | Show all tasks |
+| `orca loop` | Spawn Ralph loop |
+| `orca validate-scenarios <id>` | Run hidden scenario validation |
 
 ---
 
-## Glossary
+## 14. Glossary
 
 | Term | Definition |
 |------|------------|
-| **Loop** | A subprocess that executes tasks from the queue |
-| **Heartbeat** | Periodic signal from loop to indicate liveness |
-| **Claiming** | Atomic operation to reserve a task for execution |
-| **WAL Mode** | SQLite Write-Ahead Logging for concurrent reads |
-| **BEGIN IMMEDIATE** | SQLite transaction mode for atomic writes |
-| **TDD** | Test-Driven Development workflow |
-| **pi** | External coding agent that Orca delegates to |
-| **Phase 2** | Next development phase with advanced features |
-| **Hidden Scenario** | Validation scenario not visible to agent |
-| **Feature Tree** | Dependency graph of features/specs |
+| **Orca** | Task orchestration system for coordinating autonomous AI agents |
+| **Ralph Loop** | An autonomous AI coding agent that works through tasks |
+| **Task** | A unit of work in the backlog |
+| **Feature Tree** | Hierarchical structure of tasks linked by parent_id |
+| **Hidden Scenario** | Adversarial test generated to probe for spec gaps |
+| **HSV** | Hidden Scenario Validation - Phase 2 validation |
+| **IR** | Intermediate Representation - structured spec format |
+| **WAL** | Write-Ahead Logging - SQLite concurrency mode |
+| **Heartbeat** | Periodic signal indicating a loop is still alive |
+| **Claim** | Atomic operation to reserve a task for a loop |
 
 ---
 
-## Questions & Knowledge Gaps
+## 15. Questions & Knowledge Gaps
 
-1. **Architecture**
-   - What triggers loop termination (manual vs automatic)?
-   - How does crash recovery interact with in-flight tasks?
-
-2. **Data**
-   - What is the expected database growth rate?
-   - Are there archival/retention policies?
-
-3. **Integration**
-   - How does Orca handle pi CLI failures?
-   - What's the retry strategy for failed tasks?
-
-4. **Phase 2**
-   - Is there a timeline for Phase 2 implementation?
-   - Are hidden scenarios stored with encrypted content?
-
-5. **Operations**
-   - What's the expected number of concurrent users?
-   - Is there a backup/recovery strategy?
+1. **HTTP API scope** — What endpoints should `serve` expose?
+2. **Metrics visualization** — Should there be a web dashboard?
+3. **Multi-user support** — Is team collaboration planned?
+4. **Cloud deployment** — Any managed Orca service planned?
 
 ---
 
-## Next Steps
+## 16. Next Steps for Deeper Understanding
 
-### Immediate Actions (This Week)
-
-1. **Add ruff configuration** - Low effort, immediate value
-   ```bash
-   pip install ruff
-   ruff check src/
-   ```
-
-2. **Create basic test suite** - Critical for stability
-   ```bash
-   pip install pytest pytest-cov
-   pytest tests/ -v
-   ```
-
-3. **Add mypy type checking** - Catch type errors early
-   ```bash
-   pip install mypy
-   mypy src/orca/
-   ```
-
-### Short-term (This Month)
-
-4. **Implement `orca run`** - Core Phase 2 feature
-5. **Implement `orca loops N`** - Parallel execution
-6. **Add `hidden_scenario_runs` table** - Schema update
-7. **Create integration tests** - CLI smoke tests
-
-### Long-term (This Quarter)
-
-8. **Implement hidden scenario validation** - Phase 2 core
-9. **Add `orca serve`** - HTTP API
-10. **Set up CI/CD pipeline** - Automated testing
-11. **Performance optimization** - Address bottlenecks
+1. **Run the CLI locally** — `orca init && orca loop --claim-only` to see it in action
+2. **Explore the database** — `sqlite3 .orch/orch.db "SELECT * FROM tasks;"`
+3. **Read the SPEC.md** — Understand the spec.ir.json format
+4. **Review validation templates** — See how hidden scenarios are generated
 
 ---
 
-## Appendix: Reference Materials
+## Appendix: Explorer Coverage
 
-- **Project Spec**: `/Users/kylelampa/Documents/Vault/specs/orca-phase2-hidden-scenario-validation.md`
-- **pi Integration**: See pi documentation for agent capabilities
-- **SQLite WAL**: https://www.sqlite.org/wal.html
-- **Python argparse**: https://docs.python.org/3/library/argparse.html
+| Explorer | Status | Notes |
+|----------|--------|-------|
+| architecture-explorer | ✅ Complete | Full architecture analysis |
+| data-explorer | ✅ Complete | Schema and validation analysis |
+| api-explorer | ✅ Complete | CLI and command analysis |
+| auth-explorer | ✅ Complete | Security assessment |
+| testing-explorer | ✅ Complete | Coverage and QA analysis |
+| deployment-explorer | ✅ Complete | CI/CD and infrastructure |
+| dependencies-explorer | ✅ Complete | Package analysis |
+| code-quality-explorer | ✅ Complete | Standards and tooling |
+| ux-explorer | ✅ Complete | UX and developer experience |
+| performance-explorer | ✅ Complete | Performance analysis |
 
 ---
 
-*Document generated by Study Synthesizer*  
-*Study Date: 2026-04-22*
+*Document generated by pi study agents on May 15, 2026*
+*All 10 explorers completed successfully*

@@ -101,7 +101,7 @@ def _open_log() -> int:
 
     # Reopen if path changed or fd is closed
     if _log_fd is None:
-        _log_fd = os.open(str(log_file), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        _log_fd = os.open(str(log_file), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
 
     return _log_fd
 

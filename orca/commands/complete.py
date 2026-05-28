@@ -43,8 +43,12 @@ def _verify_task_complete() -> tuple[bool, str]:
         return verified, output
 
     # Detect Python project
-    if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists() or (cwd / "requirements.txt").exists():
-        python_cmd = shutil.which("python3") or shutil.which("python")
+    if (
+        (cwd / "pyproject.toml").exists()
+        or (cwd / "setup.py").exists()
+        or (cwd / "requirements.txt").exists()
+    ):
+        python_cmd = shutil.which("python3") or shutil.which("python") or "python"
         result = _subprocess.run(
             [python_cmd, "-m", "pytest", "-v", "--tb=short"],
             capture_output=True,
@@ -108,8 +112,14 @@ def handle_complete(args) -> dict:
         print(f"[complete] Running validation tests for task {args.task_id}...")
         verified, output = _verify_task_complete()
         if not verified:
-            update_task_status(args.task_id, "available", result_summary="Tests failed - returned to pool")
-            complete_task_run(args.task_id, loop_id, exit_status=1, result_summary="Tests failed")
+            update_task_status(
+                args.task_id,
+                "available",
+                result_summary="Tests failed - returned to pool",
+            )
+            complete_task_run(
+                args.task_id, loop_id, exit_status=1, result_summary="Tests failed"
+            )
             return {
                 "command": "complete",
                 "status": "validation_failed",
@@ -118,7 +128,7 @@ def handle_complete(args) -> dict:
                 "reason": "Tests failed - task returned to available pool",
                 "test_output": output,
             }
-        print(f"[complete] Validation passed")
+        print("[complete] Validation passed")
 
     complete_task_run(args.task_id, loop_id, exit_status=0, result_summary=args.result)
     update_task_status(args.task_id, "completed", result_summary=args.result)
@@ -162,14 +172,19 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
             "SELECT status FROM tasks WHERE id = ?", (parent_id,)
         ).fetchone()
         if parent_row and parent_row[0] == "validation":
-            remaining = conn.execute("""
+            remaining = conn.execute(
+                """
                 SELECT COUNT(*) FROM tasks
                 WHERE parent_id = ?
                   AND status NOT IN ('completed', 'blocked')
-            """, (parent_id,)).fetchone()[0]
+            """,
+                (parent_id,),
+            ).fetchone()[0]
             if remaining == 0:
                 handle_validate_scenarios(
-                    argparse.Namespace(feature_id=parent_id, check_all=False, loop_id=loop_id)
+                    argparse.Namespace(
+                        feature_id=parent_id, check_all=False, loop_id=loop_id
+                    )
                 )
         return
 
@@ -187,7 +202,8 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
 
     # Case 2: Last child completing — promote root to 'validation'.
     try:
-        result = conn.execute("""
+        result = conn.execute(
+            """
             WITH remaining AS (
                 SELECT COUNT(*) as cnt FROM tasks
                 WHERE parent_id = (
@@ -204,7 +220,9 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
               AND (SELECT cnt FROM remaining) = 0
               AND status IN ('available', 'claimed')
             RETURNING id;
-        """, (task_id, task_id, task_id)).fetchone()
+        """,
+            (task_id, task_id, task_id),
+        ).fetchone()
     except Exception:
         if not _SQLITE_SUPPORTS_RETURNING:
             warnings.warn(
@@ -222,17 +240,20 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
             return
 
         parent_id_inner = row_inner[0]
-        remaining = conn.execute("""
+        remaining = conn.execute(
+            """
             SELECT COUNT(*) FROM tasks
             WHERE parent_id = ?
               AND status != 'completed'
               AND id != ?
-        """, (parent_id_inner, task_id)).fetchone()[0]
+        """,
+            (parent_id_inner, task_id),
+        ).fetchone()[0]
 
         if remaining == 0:
             conn.execute(
                 "UPDATE tasks SET status='validation' WHERE id=? AND status IN ('available', 'claimed')",
-                (parent_id_inner,)
+                (parent_id_inner,),
             )
             conn.commit()
         else:
@@ -247,7 +268,8 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
 
     # Lock descendants as 'blocked'
     conn.execute("BEGIN IMMEDIATE")
-    conn.execute("""
+    conn.execute(
+        """
         WITH RECURSIVE descendants AS (
             SELECT id FROM tasks WHERE parent_id = ?
             UNION ALL
@@ -255,7 +277,9 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
         )
         UPDATE tasks SET status='blocked'
         WHERE id IN (SELECT id FROM descendants)
-    """, (root_id,))
+    """,
+        (root_id,),
+    )
     conn.commit()
 
     handle_validate_scenarios(
@@ -265,10 +289,7 @@ def _trigger_feature_validation_if_complete(task_id: str, loop_id: str) -> None:
 
 def _lock_feature_tree_inline(conn, root_id: str) -> None:
     """Lock a feature tree inline within an existing transaction."""
-    conn.execute(
-        "UPDATE tasks SET status='validation' WHERE id=?",
-        (root_id,)
-    )
+    conn.execute("UPDATE tasks SET status='validation' WHERE id=?", (root_id,))
 
 
 def format_complete_human(result: dict) -> str:

@@ -15,7 +15,6 @@ from .log import format_log_human, handle_log
 from .loop import format_loop_human, format_loops_human, handle_loop, handle_loops
 from .plan import format_plan_human, handle_plan
 from .reclaim import format_reclaim_human, handle_reclaim
-from .audit import format_audit_human, handle_audit
 from .metrics import format_metrics_human, handle_metrics
 from .migrate import format_migrate_human, handle_migrate
 from .serve import format_serve_human, handle_serve
@@ -37,7 +36,6 @@ COMMANDS: dict[str, tuple[Handler, Formatter]] = {
     "complete": (handle_complete, format_complete_human),
     "fail": (handle_fail, format_fail_human),
     "decompose": (handle_decompose, format_decompose_human),
-    "audit": (handle_audit, format_audit_human),
     "status": (handle_status, format_status_human),
     "list": (handle_list, format_list_human),
     "reclaim": (handle_reclaim, format_reclaim_human),

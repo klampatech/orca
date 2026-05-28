@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 import json
 
 
@@ -58,6 +57,7 @@ def load_template(path: Path) -> TestTemplate:
 
     if path.suffix.lower() in (".yaml", ".yml"):
         import yaml
+
         data = yaml.safe_load(content)
     elif path.suffix.lower() == ".json":
         data = json.loads(content)
@@ -83,7 +83,7 @@ def format_task_test(task_id: str, template: TestTemplate) -> str:
     lines = [
         f"# Test Specification: {task_id}",
         "",
-        f"## Description",
+        "## Description",
         template.description,
         "",
         "## Functional Requirements",

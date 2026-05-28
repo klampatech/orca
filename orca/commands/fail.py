@@ -36,7 +36,11 @@ def handle_fail(args) -> dict:
             "returned_to_pool": False,
         }
     else:
-        update_task_status(args.task_id, "available", result_summary=f"Failed: {args.error[:200]} - returned to pool")
+        update_task_status(
+            args.task_id,
+            "available",
+            result_summary=f"Failed: {args.error[:200]} - returned to pool",
+        )
         return {
             "command": "fail",
             "status": "success",

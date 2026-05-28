@@ -3,7 +3,6 @@
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 
 class DependencyInstaller:
@@ -30,9 +29,11 @@ class DependencyInstaller:
             return "unknown"
 
         # Python project indicators
-        if any(project_path.glob("*.py")) or (
-            project_path / "pyproject.toml"
-        ).exists() or (project_path / "setup.py").exists():
+        if (
+            any(project_path.glob("*.py"))
+            or (project_path / "pyproject.toml").exists()
+            or (project_path / "setup.py").exists()
+        ):
             return "python"
 
         # Node.js project indicators

@@ -24,10 +24,92 @@ from ..utils.logging import (
     log_inference,
     log_terminal_output,
 )
+from ..utils.spinner import WhaleSpinner
 
 
 ORCA_CMD: list[str] = [shutil.which("orca") or "orca"]
 PI_CMD: str | None = shutil.which("pi")
+
+# Default model for pi invocations
+DEFAULT_MODEL: str = "minimax/MiniMax-M2.7"
+
+
+def _debug(verbose: bool, *args) -> None:
+    """Print debug message with timestamp if verbose mode is enabled."""
+    if verbose:
+        from ..utils.time import utcnow
+        ts = utcnow()[11:19]  # Get HH:MM:SS from ISO timestamp
+        parts = " ".join(str(a) for a in args)
+        print(f"[loop:{ts}] {parts}")
+
+
+def _format_work_result(result_text: str, max_lines: int = 20) -> str:
+    """Format pi's work result into a clean bulleted summary.
+
+    Extracts key bullet points from markdown-formatted output.
+    Falls back to first 500 chars if parsing fails.
+    """
+    if not result_text:
+        return "(no output)"
+
+    lines = result_text.strip().split("\n")
+
+    # Extract bullet points, short paragraphs, and headers
+    summary_lines: list[str] = []
+    in_bullet_section = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip very long lines (probably code blocks)
+        if len(stripped) > 120:
+            continue
+
+        # Capture bullet points
+        if stripped.startswith(("- ", "• ", "* ")):
+            text = stripped[2:].strip()
+            if text and not text.startswith("```"):
+                summary_lines.append(f"  • {text}")
+                in_bullet_section = True
+
+        # Capture numbered lists
+        elif stripped and stripped[0].isdigit() and ". " in stripped[:5]:
+            summary_lines.append(f"  {stripped}")
+
+        # Capture short headers (but not the main title)
+        elif stripped.startswith("### "):
+            # Skip subsection headers, they're noise
+            continue
+
+        # Capture short non-bullet paragraphs (one-liners)
+        elif stripped and not stripped.startswith("#") and not stripped.startswith("```") and len(stripped) > 15 and len(stripped) < 100:
+            if in_bullet_section or len(summary_lines) == 0:
+                summary_lines.append(f"  • {stripped}")
+                in_bullet_section = True
+            else:
+                # Separate sections with a dash
+                if summary_lines and not summary_lines[-1].startswith("  ---"):
+                    summary_lines.append("  ---")
+                summary_lines.append(f"  • {stripped}")
+
+        else:
+            in_bullet_section = False
+
+    # Deduplicate consecutive bullets with same content
+    cleaned: list[str] = []
+    for line in summary_lines:
+        if not cleaned or line != cleaned[-1]:
+            cleaned.append(line)
+
+    # Limit to max_lines
+    if len(cleaned) > max_lines:
+        cleaned = cleaned[:max_lines] + [f"  ... (+{len(cleaned) - max_lines} more lines)"]
+
+    if not cleaned:
+        # Fallback: just show first 500 chars
+        return result_text.strip()[:500]
+
+    return "\n".join(cleaned)
 
 
 def _claim_task() -> str | None:
@@ -64,7 +146,7 @@ def _get_task_info(task_id: str) -> dict | None:
         return None
 
 
-def _run_pi(prompt: str, timeout: int | None = None, verbose: bool = False) -> str:
+def _run_pi(prompt: str, timeout: int | None = None, verbose: bool = False, model: str | None = None) -> str:
     """Pipe a prompt to pi -p, return the result text.
 
     Also forks the inference for debugging.
@@ -73,15 +155,18 @@ def _run_pi(prompt: str, timeout: int | None = None, verbose: bool = False) -> s
         prompt: The prompt to send to pi.
         timeout: Maximum seconds to wait (None = unlimited).
         verbose: If True, print extra debugging info.
+        model: Model to use (default: minimax/MiniMax-M2.7).
     """
     if PI_CMD is None:
         raise RuntimeError("pi CLI not found in PATH")
 
-    cmd: list[str] = [PI_CMD, "-p", prompt]
+    cmd: list[str] = [PI_CMD]
+    if model:
+        cmd.extend(["--model", model])
+    cmd.extend(["-p", prompt])
 
-    if verbose:
-        print(f"[loop:debug] pi command: {' '.join(cmd[:3])} ...")
-        print(f"[loop:debug] prompt chars: {len(prompt)}")
+    _debug(verbose, "pi command:", " ".join(cmd[:5]), "...")
+    _debug(verbose, "prompt chars:", len(prompt))
 
     start_time = time.time()
     result = subprocess.run(
@@ -110,10 +195,9 @@ def _run_pi(prompt: str, timeout: int | None = None, verbose: bool = False) -> s
             duration_ms=duration_ms,
             success=False,
         )
-        if verbose:
-            print(f"[loop:debug] pi FAILED exit_code={result.returncode}")
-            print(f"[loop:debug] pi stderr: {result.stderr[:500]}")
-            print(f"[loop:debug] pi stdout: {result.stdout[:500]}")
+        _debug(verbose, "pi FAILED exit_code=", result.returncode)
+        _debug(verbose, "pi stderr:", result.stderr[:500])
+        _debug(verbose, "pi stdout:", result.stdout[:500])
         raise RuntimeError(
             f"pi exited with code {result.returncode}: {result.stderr[:500]}"
         )
@@ -121,7 +205,7 @@ def _run_pi(prompt: str, timeout: int | None = None, verbose: bool = False) -> s
     return result.stdout.strip()
 
 
-def _run_tests() -> tuple[bool, str]:
+def _run_tests(timeout: int = 120) -> tuple[bool, str]:
     """Run project tests and return (success, output).
 
     Detects project type and runs appropriate test command:
@@ -131,6 +215,9 @@ def _run_tests() -> tuple[bool, str]:
     - Ruby (Gemfile): bundle exec rspec
 
     Also logs the test output.
+
+    Args:
+        timeout: Maximum seconds to wait for tests (default: 120).
     """
     cwd = Path.cwd()
     start_time = time.time()
@@ -141,7 +228,7 @@ def _run_tests() -> tuple[bool, str]:
             ["npm", "test"],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         duration_ms = int((time.time() - start_time) * 1000)
         success = result.returncode == 0
@@ -170,7 +257,7 @@ def _run_tests() -> tuple[bool, str]:
             python_cmd_list + ["-m", "pytest", "-v", "--tb=short"],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         duration_ms = int((time.time() - start_time) * 1000)
         success = result.returncode == 0
@@ -193,7 +280,7 @@ def _run_tests() -> tuple[bool, str]:
             ["go", "test", "./..."],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         duration_ms = int((time.time() - start_time) * 1000)
         success = result.returncode == 0
@@ -216,7 +303,7 @@ def _run_tests() -> tuple[bool, str]:
             ["bundle", "exec", "rspec"],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         duration_ms = int((time.time() - start_time) * 1000)
         success = result.returncode == 0
@@ -259,64 +346,87 @@ def _do_work(
     loop_id: str,
     pi_timeout: int | None = None,
     verbose: bool = False,
+    ir_snippet: str | None = None,
+    parent_id: str | None = None,
+    test_timeout: int = 120,
+    no_verify: bool = False,
 ) -> str:
     """Run pi to implement the given task, validate with tests. Returns result summary.
 
     Logs the inference for debugging.
 
-
     Args:
-        task_id: The task ID being worked on.
+        task_id: The task ID being worked on (claimed).
         description: Task description.
         spec_path: Optional path to spec file.
         loop_id: The loop ID.
         pi_timeout: Timeout for pi in seconds (None = unlimited).
+        verbose: If True, print extra debug info.
+        ir_snippet: Optional JSON IR context for IR-based tasks.
+        parent_id: Optional parent task ID for hierarchy context.
+        test_timeout: Timeout for tests in seconds (default: 120).
+        no_verify: If True, skip test verification entirely.
     """
     start_time = time.time()
 
-    # Build the prompt for Otto — follows IMPLEMENTATION_PLAN.md generated by orca plan
+    # Build a FOCUSED prompt for the claimed task — no plan reading, no "choose what to do"
+    # The human/decomposer already decided what this task is. This loop implements ONLY this task.
     prompt_parts = [
-        "You are Otto — an autonomous AI coding agent.\n",
-        "Implement functionality following @IMPLEMENTATION_PLAN.md. Work in the current directory.\n",
+        "You are Orca — an autonomous AI coding agent.\n",
+        "Work in the current directory.\n",
     ]
 
-    # Updated build iteration instructions
-    prompt_parts.extend(
-        [
-            "## Scenario",
-            description,
-            "",
-            "## Instructions (follow in order)",
-            "",
-            "**Study Phase**",
-            "0a. Study `specs/*` with up to 500 parallel Sonnet subagents to learn the application specifications.",
-            "0b. Study @IMPLEMENTATION_PLAN.md.",
-            "0c. For reference, the application source code is in `src/*`.",
-            "",
-            "**Implementation Phase**",
-            "1. Your task is to implement functionality per the specifications using parallel subagents. Follow @IMPLEMENTATION_PLAN.md and choose the most important item to address. Before making changes, search the codebase (don't assume not implemented) using Sonnet subagents. You may use up to 500 parallel Sonnet subagents for searches/reads and only 1 Sonnet subagent for build/tests. Use Opus subagents when complex reasoning is needed (debugging, architectural decisions).",
-            "2. After implementing functionality or resolving problems, run the tests for that unit of code that was improved. If functionality is missing then it's your job to add it as per the application specifications. Ultrathink.",
-            "3. When you discover issues, immediately update @IMPLEMENTATION_PLAN.md with your findings using a subagent. When resolved, update and remove the item.",
-            "4. When the tests pass, update @IMPLEMENTATION_PLAN.md, then `git add -A` then `git commit` with a message describing the changes. After the commit, `git push`.",
-            "",
-            "**Maintenance Phase**",
-            "99999. Important: When authoring documentation, capture the why — tests and implementation importance.",
-            "999999. Important: Single sources of truth, no migrations/adapters. If tests unrelated to your work fail, resolve them as part of the increment.",
-            "9999999. As soon as there are no build or test errors create a git tag. If there are no git tags start at 0.0.0 and increment patch by 1 for example 0.0.1  if 0.0.0 does not exist.",
-            "99999999. You may add extra logging if required to debug issues.",
-            "999999999. Keep @IMPLEMENTATION_PLAN.md current with learnings using a subagent — future work depends on this to avoid duplicating efforts. Update especially after finishing your turn.",
-            "9999999999. When you learn something new about how to run the application, update @AGENTS.md using a subagent but keep it brief. For example if you run commands multiple times before learning the correct command then that file should be updated.",
-            "99999999999. For any bugs you notice, resolve them or document them in @IMPLEMENTATION_PLAN.md using a subagent even if it is unrelated to the current piece of work.",
-            "999999999999. Implement functionality completely. Placeholders and stubs waste efforts and time redoing the same work.",
-            "9999999999999. When @IMPLEMENTATION_PLAN.md becomes large periodically clean out the items that are completed from the file using a subagent.",
-            "99999999999999. If you find inconsistencies in the specs/* then use an Opus 4.6 subagent with 'ultrathink' requested to update the specs.",
-            "999999999999999. IMPORTANT: Keep @AGENTS.md operational only – status updates and progress notes belong in `IMPLEMENTATION_PLAN.md`. A bloated AGENTS.md pollutes every future loop's context.",
-            "",
-        ]
-    )
+    # CLAIMED TASK — this is the only work to do
+    prompt_parts.extend([
+        "## Claimed Task",
+        f"Task ID: {task_id}",
+        f"Description: {description}",
+        "",
+    ])
 
+    # IR context if available (contains rich feature/AC/edge-case details)
+    if ir_snippet:
+        prompt_parts.extend([
+            "## Task Context (from decomposition)",
+            ir_snippet,
+            "",
+        ])
+
+    # Spec reference
     if spec_path:
-        prompt_parts.append(f"Spec file: {spec_path}")
+        prompt_parts.extend([
+            "## Spec Reference",
+            f"This task is derived from: {spec_path}",
+            "",
+        ])
+
+    # Parent context if this is a sub-task
+    if parent_id:
+        prompt_parts.extend([
+            "## Parent Task Context",
+            f"This task has parent: {parent_id}",
+            "",
+        ])
+
+    # Focused instructions — implement THIS task only
+    prompt_parts.extend([
+        "## Instructions",
+        "",
+        "1. IMPLEMENT ONLY THIS TASK. Do not work on other tasks or items in the plan.",
+        "2. Search the codebase to understand existing structure before implementing.",
+        "3. Use parallel subagents for searches/reads (up to 500 Sonnet), only 1 Sonnet for build/tests.",
+        "4. Use Opus for complex reasoning (debugging, architectural decisions).",
+        "5. When implemented, run the relevant tests.",
+        "6. If you discover prerequisite work that blocks this task, note it and do minimal work to unblock — but DO NOT wander into other tasks.",
+        "7. When tests pass, `git add -A` then `git commit` with a message describing the changes. After the commit, `git push`.",
+        "8. If you discover issues, document them — but focus on completing THIS task.",
+        "",
+        "## Important Rules",
+        "- You own this task. Others may claim adjacent work. Stay focused on your task ID.",
+        "- Do NOT read IMPLEMENTATION_PLAN.md to decide what to work on — that decision is already made (this is your assigned task).",
+        "- If you notice bugs unrelated to this task, document them but don't fix them unless they block your work.",
+        "",
+    ])
 
     prompt_parts.append(
         "Return a brief summary of what you did, including test results."
@@ -332,10 +442,12 @@ def _do_work(
 
     print("[loop] Starting pi...")
 
+    result_text = ""
     # Log inference start
     infer_start = time.time()
     try:
-        result_text = _run_pi(test_first_prompt, timeout=pi_timeout, verbose=verbose)
+        with WhaleSpinner("Orca is coding", interval=0.12):
+            result_text = _run_pi(test_first_prompt, timeout=pi_timeout, verbose=verbose, model=DEFAULT_MODEL)
         infer_duration_ms = int((time.time() - infer_start) * 1000)
 
         # Log inference completion
@@ -346,14 +458,29 @@ def _do_work(
             success=True,
         )
 
-        print(f"[loop] pi done: {result_text[:100]}")
+        print("[loop] Work summary:")
+        summary = _format_work_result(result_text)
+        for line in summary.split("\n"):
+            print(f"  {line}")
 
-        # Run validation tests
-        print("[loop] Running validation tests...")
-        tests_passed, test_output = _run_tests()
-        print(f"[loop] Tests: {'PASSED' if tests_passed else 'FAILED'}")
-        if not tests_passed:
-            raise RuntimeError(f"Tests failed:\n{test_output}")
+        # Run validation tests (unless skipped)
+        if no_verify:
+            print("[loop] Tests: SKIPPED (--no-verify)")
+        else:
+            print(f"[loop] Running validation tests (timeout: {test_timeout}s)...")
+            try:
+                tests_passed, test_output = _run_tests(timeout=test_timeout)
+                print(f"[loop] Tests: {'PASSED' if tests_passed else 'FAILED'}")
+                if not tests_passed:
+                    raise RuntimeError(f"Tests failed:\n{test_output}")
+            except subprocess.TimeoutExpired:
+                print(f"[loop] Tests: TIMEOUT after {test_timeout}s")
+                raise RuntimeError(f"Tests timed out after {test_timeout}s")
+    except KeyboardInterrupt:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=5)
+        print("\n[loop] Interrupted by user — exiting gracefully")
+        raise
     finally:
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=5)
@@ -423,6 +550,8 @@ def handle_loop(args) -> dict:
     claim_only: bool = getattr(args, "claim_only", False)
     pi_timeout: int | None = getattr(args, "pi_timeout", None)
     verbose: bool = getattr(args, "verbose", False)
+    test_timeout: int = getattr(args, "test_timeout", 120)
+    no_verify: bool = getattr(args, "no_verify", False)
     task_id = _claim_task()
 
     if task_id is None:
@@ -434,7 +563,7 @@ def handle_loop(args) -> dict:
                 "count": 1,
                 "claimed": False,
             }
-        print("[loop] No tasks available, sleeping 30s...")
+        print("[loop] No tasks available, will retry in 30s...")
 
     if claim_only:
         if task_id:
@@ -443,13 +572,18 @@ def handle_loop(args) -> dict:
             description = info.get("description", "") if info else ""
             spec_path = info.get("spec_path") if info else None
             priority = info.get("priority", 0) if info else 0
+            ir_snippet = info.get("ir_snippet") if info else None
+            parent_id = info.get("parent_id") if info else None
 
             # Log task claim
             log_task_claim(task_id, loop_id, priority)
 
             try:
-                result_text = _do_work(task_id, description, spec_path, loop_id, pi_timeout, verbose)
-                print(f"[loop] pi done: {result_text[:100]}")
+                result_text = _do_work(task_id, description, spec_path, loop_id, pi_timeout, verbose, ir_snippet, parent_id, test_timeout, no_verify)
+                print("[loop] Work summary:")
+                summary = _format_work_result(result_text)
+                for line in summary.split("\n"):
+                    print(f"  {line}")
                 _complete_task(task_id, result_text[:500])
             except Exception as e:
                 print(f"[loop] Work failed: {e}")
@@ -476,15 +610,25 @@ def handle_loop(args) -> dict:
                 description = info.get("description", "") if info else ""
                 spec_path = info.get("spec_path") if info else None
                 priority = info.get("priority", 0) if info else 0
+                ir_snippet = info.get("ir_snippet") if info else None
+                parent_id = info.get("parent_id") if info else None
 
                 # Log task claim
                 log_task_claim(task_id, loop_id, priority)
 
                 try:
-                    result_text = _do_work(task_id, description, spec_path, loop_id, pi_timeout, verbose)
-                    print(f"[loop] pi done: {result_text[:100]}")
+                    result_text = _do_work(task_id, description, spec_path, loop_id, pi_timeout, verbose, ir_snippet, parent_id, test_timeout, no_verify)
+                    print("[loop] Work summary:")
+                    summary = _format_work_result(result_text)
+                    for line in summary.split("\n"):
+                        print(f"  {line}")
                     _complete_task(task_id, result_text[:500])
                     tasks_processed += 1
+                except KeyboardInterrupt:
+                    duration = time.time() - start_time
+                    print("\n[loop] Interrupted by user — exiting gracefully")
+                    log_loop_end(loop_id, duration, tasks_processed)
+                    return {"command": "loop", "status": "interrupted", "count": tasks_processed}
                 except Exception as e:
                     print(f"[loop] Work failed: {e}")
                     log_task_fail(task_id, loop_id, str(e))
@@ -492,19 +636,24 @@ def handle_loop(args) -> dict:
 
             task_id = None
             while task_id is None:
-                print("[loop] No tasks available, sleeping 30s...")
+                print("[loop] Waiting 30s before retrying...")
                 try:
                     time.sleep(30)
                 except KeyboardInterrupt:
-                    print("\n[loop] Interrupted — exiting.")
                     duration = time.time() - start_time
+                    print("\n[loop] Interrupted by user — exiting gracefully")
                     log_loop_end(loop_id, duration, tasks_processed)
-                    return {"command": "loop", "status": "success", "count": 1}
+                    return {"command": "loop", "status": "interrupted", "count": tasks_processed}
 
                 task_id = _claim_task()
                 if task_id is None:
-                    print("[loop] No tasks available, retrying...")
+                    print("[loop] Still no tasks available...")
 
+    except KeyboardInterrupt:
+        duration = time.time() - start_time
+        print("\n[loop] Interrupted by user — exiting gracefully")
+        log_loop_end(loop_id, duration, tasks_processed)
+        return {"command": "loop", "status": "interrupted", "count": tasks_processed}
     except Exception as e:
         log_loop_error(loop_id, str(e))
         raise

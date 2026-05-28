@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from .templates import TestTemplate, format_task_test
+from .templates import TestTemplate
 
 
 class TestGenerator:
@@ -74,8 +74,7 @@ class TestGenerator:
 
         # Get implementation info
         impl = task.get("implementation", {})
-        file_path = impl.get("file", "")
-        function_name = impl.get("function", "")
+        impl.get("file", "")  # kept for documentation
 
         content = [
             '"""Auto-generated test for task: {}""".'.format(template.task_id),
@@ -84,9 +83,9 @@ class TestGenerator:
             "import sys",
             "from pathlib import Path",
             "",
-            f"# Add project root to path",
-            f"project_root = Path(__file__).parent.parent",
-            f"sys.path.insert(0, str(project_root))",
+            "# Add project root to path",
+            "project_root = Path(__file__).parent.parent",
+            "sys.path.insert(0, str(project_root))",
             "",
             "",
             f"class Test{template.task_id.replace('-', '_').title().replace('_', '')}:",
@@ -107,13 +106,13 @@ class TestGenerator:
                     step_type = step.get("type", "step")
                     step_text = step.get("text", "")
                     if step_type.lower() == "given":
-                        lines.append(f'        # Given: {step_text}')
+                        lines.append(f"        # Given: {step_text}")
                     elif step_type.lower() == "when":
-                        lines.append(f'        # When: {step_text}')
+                        lines.append(f"        # When: {step_text}")
                     elif step_type.lower() == "then":
-                        lines.append(f'        # Then: {step_text}')
+                        lines.append(f"        # Then: {step_text}")
                     else:
-                        lines.append(f'        # {step_text}')
+                        lines.append(f"        # {step_text}")
 
             # Add assertion placeholder
             lines.append("        # TODO: Add assertions based on expected behavior")
@@ -126,13 +125,15 @@ class TestGenerator:
             content.extend(["", "    # Edge cases (not yet implemented)"])
             for edge in template.edge_cases:
                 edge_name = edge.lower().replace(" ", "_").replace("-", "_")
-                content.extend([
-                    "",
-                    f"    @pytest.mark.skip(reason='Edge case not yet implemented')",
-                    f"    def test_edge_{edge_name}(self):",
-                    f'        """Edge case: {edge}"""',
-                    "        pass",
-                ])
+                content.extend(
+                    [
+                        "",
+                        "    @pytest.mark.skip(reason='Edge case not yet implemented')",
+                        f"    def test_edge_{edge_name}(self):",
+                        f'        """Edge case: {edge}"""',
+                        "        pass",
+                    ]
+                )
 
         test_file.write_text("\n".join(content))
         return test_file
@@ -150,17 +151,18 @@ class TestGenerator:
             f" * Description: {template.description}",
             " */",
             "",
-            "describe('{}', () => {{".format(template.task_id.replace('-', ' ').title()),
+            "describe('{}', () => {{".format(
+                template.task_id.replace("-", " ").title()
+            ),
         ]
 
         for tc in template.test_cases:
-            case_id = tc.get("id", "test_case")
-            method_name = f"test_{case_id.replace('-', '_')}"
-
-            content.extend([
-                "",
-                f"  test('{tc.get('description', '')}', () => {{",
-            ])
+            content.extend(
+                [
+                    "",
+                    f"  test('{tc.get('description', '')}', () => {{",
+                ]
+            )
 
             steps = tc.get("steps", [])
             for step in steps:
@@ -170,11 +172,13 @@ class TestGenerator:
                     comment = f"// {step_type.upper()}: {step_text}"
                     content.append(f"    {comment}")
 
-            content.extend([
-                "    // TODO: Add assertions",
-                "    expect(true).toBe(true);",
-                "  });",
-            ])
+            content.extend(
+                [
+                    "    // TODO: Add assertions",
+                    "    expect(true).toBe(true);",
+                    "  });",
+                ]
+            )
 
         content.append("});")
 
@@ -189,7 +193,9 @@ class TestGenerator:
         test_file = output_dir / test_name
 
         content = [
-            "// Package tests - auto-generated test for task: {}".format(template.task_id),
+            "// Package tests - auto-generated test for task: {}".format(
+                template.task_id
+            ),
             "package tests",
             "",
             'import "testing"',
@@ -200,11 +206,13 @@ class TestGenerator:
             case_id = tc.get("id", "test_case")
             func_name = f"Test{case_id.replace('-', '_').title().replace('_', '')}"
 
-            content.extend([
-                "",
-                f"func {func_name}(t *testing.T) {{",
-                f"    // Test: {tc.get('description', '')}",
-            ])
+            content.extend(
+                [
+                    "",
+                    f"func {func_name}(t *testing.T) {{",
+                    f"    // Test: {tc.get('description', '')}",
+                ]
+            )
 
             steps = tc.get("steps", [])
             for step in steps:
@@ -213,10 +221,12 @@ class TestGenerator:
                     step_text = step.get("text", "")
                     content.append(f"    // {step_type.upper()}: {step_text}")
 
-            content.extend([
-                "    // TODO: Add assertions",
-                "}",
-            ])
+            content.extend(
+                [
+                    "    // TODO: Add assertions",
+                    "}",
+                ]
+            )
 
         test_file.write_text("\n".join(content))
         return test_file
@@ -292,7 +302,9 @@ class TestGenerator:
         return generated, result
 
 
-def generate_tests_for_task(task: dict, template: TestTemplate, output_dir: Path) -> list[Path]:
+def generate_tests_for_task(
+    task: dict, template: TestTemplate, output_dir: Path
+) -> list[Path]:
     """Convenience function to generate tests for a task.
 
     Args:

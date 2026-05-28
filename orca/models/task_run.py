@@ -145,13 +145,15 @@ def reclaim_stale_task_runs(conn: sqlite3.Connection) -> int:
     Returns:
         The number of task runs reclaimed.
     """
-    import sqlite3
 
-    now = datetime.now(timezone.utc)
-    threshold = now.isoformat().replace("+00:00", "Z")
-    timeout_str = f"-{HEARTBEAT_TIMEOUT_SECONDS} seconds"
-    threshold_dt = datetime.now(timezone.utc).timestamp() - HEARTBEAT_TIMEOUT_SECONDS
-    threshold_dt = datetime.fromtimestamp(threshold_dt, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    threshold_dt = (
+        datetime.fromtimestamp(
+            datetime.now(timezone.utc).timestamp() - HEARTBEAT_TIMEOUT_SECONDS,
+            tz=timezone.utc,
+        )
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
     rows = conn.execute(
         """

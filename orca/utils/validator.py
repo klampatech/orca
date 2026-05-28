@@ -170,6 +170,18 @@ class SpecIRValidator:
                 feat_id = feature.get("id", "unknown")
                 acs = feature.get("acceptanceCriteria", {})
 
+                # Handle case where acceptanceCriteria is a list instead of dict
+                if isinstance(acs, list):
+                    errors.append(
+                        ValidationError(
+                            field=f"coreFeatures.{tier}.{feat_id}.acceptanceCriteria",
+                            message="acceptanceCriteria should be an object, got list",
+                            suggestion="Wrap the list in an object: { happyPath: [...] }",
+                        )
+                    )
+                    # Convert list to object format for continued validation
+                    acs = {"happyPath": acs}
+
                 # Feature must have acceptanceCriteria object
                 if not acs:
                     errors.append(
@@ -405,6 +417,7 @@ class SpecIRValidator:
 
         valid_languages = [
             "python",
+            "python3",
             "typescript",
             "javascript",
             "go",
@@ -412,15 +425,35 @@ class SpecIRValidator:
             "java",
             "csharp",
             "cpp",
+            "c++",
             "ruby",
             "php",
             "swift",
             "kotlin",
             "scala",
             "bash",
+            "shell",
+            "cli",
+            "web",
+            "mobile",
+            "desktop",
+            "cross-platform",
             "unknown",
         ]
-        if tech.get("language") not in valid_languages:
+        language = tech.get("language", "")
+        # Normalize: strip version numbers, lowercase, etc.
+        normalized_lang = language.lower().split()[0] if language else ""
+        # Also accept exact versioned formats like "Python 3.11+"
+        if language.lower() in [lang.lower() for lang in valid_languages]:
+            normalized_lang = language.lower()
+        elif normalized_lang in ["python", "python3", "py"]:
+            normalized_lang = "python"
+        elif normalized_lang in ["typescript", "ts"]:
+            normalized_lang = "typescript"
+        elif normalized_lang in ["javascript", "js", "nodejs"]:
+            normalized_lang = "javascript"
+
+        if normalized_lang not in valid_languages:
             errors.append(
                 ValidationError(
                     field="technicalApproach.language",
@@ -440,9 +473,46 @@ class SpecIRValidator:
             "mobile",
             "desktop",
             "embedded",
+            "pipeline",
+            "pipe-and-filter",
+            "event-driven",
+            "layered",
+            "hexagonal",
+            "microservices",
+            "single-process",
+            "multi-process",
+            "sequential",
+            "orchestration",
+            "agentic",
             "unknown",
         ]
-        if tech.get("architecture") not in valid_arch:
+        architecture = tech.get("architecture", "")
+        # Normalize: extract key pattern from multi-word descriptions
+        normalized_arch = architecture.lower() if architecture else ""
+        # Accept various descriptive formats
+        if not normalized_arch:
+            pass  # Will trigger validation error
+        elif any(
+            k in normalized_arch
+            for k in ["pipe", "filter", "shell", "cli invok", "sequential", "pipeline"]
+        ):
+            normalized_arch = "pipeline"
+        elif any(
+            k in normalized_arch
+            for k in ["single-process", "single process", "single process"]
+        ):
+            normalized_arch = "single-process"
+        elif any(
+            k in normalized_arch
+            for k in ["multi-process", "multi process", "orchestrat"]
+        ):
+            normalized_arch = "multi-process"
+        elif any(k in normalized_arch for k in ["agent", "llm", "ai"]):
+            normalized_arch = "agentic"
+        elif normalized_arch in ["microservices", "micro-services"]:
+            normalized_arch = "microservices"
+
+        if normalized_arch not in valid_arch:
             errors.append(
                 ValidationError(
                     field="technicalApproach.architecture",

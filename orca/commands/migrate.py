@@ -31,9 +31,9 @@ def handle_migrate(args) -> dict[str, Any]:
     """)
 
     migrations_dir = Path(__file__).parent.parent / "db" / "migrations"
-    applied = {row[0] for row in conn.execute(
-        "SELECT name FROM schema_migrations"
-    ).fetchall()}
+    applied = {
+        row[0] for row in conn.execute("SELECT name FROM schema_migrations").fetchall()
+    }
 
     results = []
     pending = sorted(migrations_dir.glob("*_up.sql"))

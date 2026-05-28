@@ -39,7 +39,16 @@ def create_task(
         INSERT INTO tasks (id, spec_path, description, status, priority, created_at, parent_id, root_spec_path, ir_snippet)
         VALUES (?, ?, ?, 'available', ?, ?, ?, ?, ?)
         """,
-        (task_id, spec_path, description, priority, now, parent_id, root_spec_path, ir_snippet),
+        (
+            task_id,
+            spec_path,
+            description,
+            priority,
+            now,
+            parent_id,
+            root_spec_path,
+            ir_snippet,
+        ),
     )
 
     return {
@@ -89,20 +98,22 @@ def create_tasks_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 task_data.get("ir_snippet"),
             ),
         )
-        created.append({
-            "id": task_id,
-            "spec_path": task_data.get("spec_path"),
-            "description": task_data["description"],
-            "status": "available",
-            "priority": task_data.get("priority", 0),
-            "created_at": now,
-            "claimed_at": None,
-            "completed_at": None,
-            "result_summary": None,
-            "parent_id": task_data.get("parent_id"),
-            "root_spec_path": task_data.get("root_spec_path"),
-            "ir_snippet": task_data.get("ir_snippet"),
-        })
+        created.append(
+            {
+                "id": task_id,
+                "spec_path": task_data.get("spec_path"),
+                "description": task_data["description"],
+                "status": "available",
+                "priority": task_data.get("priority", 0),
+                "created_at": now,
+                "claimed_at": None,
+                "completed_at": None,
+                "result_summary": None,
+                "parent_id": task_data.get("parent_id"),
+                "root_spec_path": task_data.get("root_spec_path"),
+                "ir_snippet": task_data.get("ir_snippet"),
+            }
+        )
 
     conn.commit()
     return created
@@ -196,7 +207,7 @@ def update_task_status(
     conn = get_connection()
     now = utcnow()
     cursor = conn.execute(
-        f"UPDATE tasks SET status = ?, completed_at = ?, result_summary = ? WHERE id = ?",
+        "UPDATE tasks SET status = ?, completed_at = ?, result_summary = ? WHERE id = ?",
         (status, now, result_summary, task_id),
     )
     return cursor.rowcount > 0

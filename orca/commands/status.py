@@ -19,6 +19,8 @@ def handle_status(args) -> dict:
     by_status: dict[str, list] = {
         "available": [],
         "claimed": [],
+        "validation": [],
+        "blocked": [],
         "completed": [],
         "failed": [],
     }
@@ -42,7 +44,14 @@ def format_status_human(result: dict) -> str:
         f"Total: {result['total']} tasks\n",
     ]
 
-    for status in ("available", "claimed", "completed", "failed"):
+    for status in (
+        "available",
+        "claimed",
+        "validation",
+        "blocked",
+        "completed",
+        "failed",
+    ):
         tasks = result["by_status"].get(status, [])
         if tasks:
             label = status.capitalize()

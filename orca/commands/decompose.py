@@ -532,8 +532,7 @@ def handle_decompose(args) -> dict:
     return {
         "command": "decompose",
         "status": "success",
-        "mode": mode
-,
+        "mode": mode,
         "spec_root_id": result_tasks[0]["id"],
         "spec_path": stored_spec_path,
         "total_tasks": len(result_tasks),

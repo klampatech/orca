@@ -60,7 +60,14 @@ def _validate_single_feature(feature_id: str, *, loop_id: str | None = None) -> 
     # Log validation start
     log_validation_start(feature_id)
 
-    # Get spec path and code paths
+    # Get feature description from task
+    conn = get_connection()
+    task_row = conn.execute(
+        "SELECT description FROM tasks WHERE id = ?", (feature_id,)
+    ).fetchone()
+    feature_description = task_row[0] if task_row else ""
+
+    # Get spec path (IMPLEMENTATION_PLAN.md) and code paths
     spec_path = get_root_spec_path(feature_id)
     code_paths = get_feature_code_paths(feature_id)
 
@@ -69,7 +76,7 @@ def _validate_single_feature(feature_id: str, *, loop_id: str | None = None) -> 
         raise ValueError(f"No code files found for feature {feature_id}")
 
     # Build the pi prompt
-    prompt = _build_hsv_prompt(spec_path, code_paths, feature_id)
+    prompt = _build_hsv_prompt(spec_path, code_paths, feature_id, feature_description)
 
     # Run pi to generate tests
     print(f"[validate-scenarios] Generating hidden scenarios for {feature_id}...")
@@ -247,22 +254,30 @@ def _validate_single_feature(feature_id: str, *, loop_id: str | None = None) -> 
     return _build_result(feature_id, passed, failed, errors)
 
 
-def _build_hsv_prompt(spec_path: Path, code_paths: list[Path], feature_id: str) -> str:
-    """Build the pi prompt for hidden scenario generation."""
+def _build_hsv_prompt(spec_path: Path, code_paths: list[Path], feature_id: str, feature_description: str = "") -> str:
+    """Build the pi prompt for hidden scenario generation.
+
+    Uses IMPLEMENTATION_PLAN.md and the feature description to generate
+    adversarial tests that probe gaps in the implementation.
+    """
     encoded_feature_id = urllib.parse.quote(feature_id)
     output_dir = f".orch/hidden_scenarios/{encoded_feature_id}"
 
     code_paths_str = "\n- ".join(str(p) for p in code_paths[:20])  # Limit to 20 files
 
-    return f"""You are a red-team testing assistant. Read the spec and code below,
-then generate pytest tests that probe for gaps the spec doesn't cover.
+    feature_context = f"\nFeature: {feature_description}" if feature_description else ""
+
+    return f"""You are a red-team testing assistant. Read the implementation plan and code below,
+then generate pytest tests that probe for gaps the plan doesn't cover.
+
+{f"Feature Context:{feature_context}" if feature_context else ""}
 
 Read these files from disk:
-- {spec_path}
+- {spec_path}  (the implementation plan)
 - {code_paths_str}
 
 Generate 5-10 hidden scenario tests that are NOT covered by:
-- The acceptance criteria in spec.ir.json
+- The tasks in IMPLEMENTATION_PLAN.md
 - The existing tests
 
 Write each test to:
@@ -402,31 +417,70 @@ def _record_hsv_run(
 
 
 def get_root_spec_path(feature_id: str) -> Path:
-    """Resolve the spec.ir.json path for a feature root."""
+    """Resolve the IMPLEMENTATION_PLAN.md path for a feature root.
+
+    First looks for IMPLEMENTATION_PLAN.md at the project root (derived from
+    root_spec_path). Falls back to the spec directory for backward compat.
+    """
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT root_spec_path, description FROM tasks WHERE id = ?", (feature_id,)
+    ).fetchone()
+    if not row or not row[0]:
+        raise ValueError(f"Feature root {feature_id} has no root_spec_path")
+
+    root_spec_path = Path(row[0])
+    spec_dir = root_spec_path.parent
+
+    # Try project root first (where IMPLEMENTATION_PLAN.md lives)
+    # Project root = spec_dir's parent, assuming structure like:
+    #   project-root/
+    #     IMPLEMENTATION_PLAN.md
+    #     specs/
+    #       some-spec.md
+    project_root = spec_dir.parent
+    impl_plan = project_root / "IMPLEMENTATION_PLAN.md"
+    if impl_plan.exists():
+        return impl_plan
+
+    # Fall back to spec directory (for backward compat or embedded specs)
+    impl_plan_in_spec_dir = spec_dir / "IMPLEMENTATION_PLAN.md"
+    if impl_plan_in_spec_dir.exists():
+        return impl_plan_in_spec_dir
+
+    # No IMPLEMENTATION_PLAN.md found — raise a helpful error
+    raise FileNotFoundError(
+        f"IMPLEMENTATION_PLAN.md not found. Looked in:\n"
+        f"  - {impl_plan}"
+        f"  - {impl_plan_in_spec_dir}\n"
+        f"Task root_spec_path: {root_spec_path}"
+    )
+
+
+def get_feature_code_paths(feature_id: str) -> list[Path]:
+    """Find all code files belonging to a feature.
+
+    Scans from the project root (derived from root_spec_path), not from
+    IMPLEMENTATION_PLAN.md location, since code lives in the project root.
+    """
+    from pathlib import Path
+
     conn = get_connection()
     row = conn.execute(
         "SELECT root_spec_path FROM tasks WHERE id = ?", (feature_id,)
     ).fetchone()
     if not row or not row[0]:
-        raise ValueError(f"Feature root {feature_id} has no root_spec_path")
+        return []
+
+    # Derive project root from spec path
+    # spec is typically in project-root/specs/ or project-root/.orch/tasks/
+    # Project root is one level up from the spec directory
     spec_dir = Path(row[0]).parent
-    ir_path = spec_dir / "spec.ir.json"
-    if not ir_path.exists():
-        raise FileNotFoundError(f"spec.ir.json not found at {ir_path}")
-    return ir_path
-
-
-def get_feature_code_paths(feature_id: str) -> list[Path]:
-    """Find all code files belonging to a feature."""
-    from pathlib import Path
-
-    spec_path = get_root_spec_path(feature_id)
-    spec_dir = spec_path.parent
-    scan_root = spec_dir
+    project_root = spec_dir.parent
 
     CODE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".go", ".rb", ".java", ".rs"}
     code_files = []
-    for root, dirs, files in os.walk(scan_root):
+    for root, dirs, files in os.walk(project_root):
         dirs[:] = [
             d
             for d in dirs
@@ -440,6 +494,7 @@ def get_feature_code_paths(feature_id: str) -> list[Path]:
                 "target",
                 "dist",
                 "build",
+                ".orch",  # Skip orca's own data dir
             )
         ]
         for file in files:

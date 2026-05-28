@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import time
 from pathlib import Path
 
 
@@ -123,7 +122,9 @@ def run_pi(
         raise LLMError(f"pi timed out after {timeout} seconds")
 
     if result.returncode != 0:
-        raise LLMError(f"pi exited with code {result.returncode}: {result.stderr[:500]}")
+        raise LLMError(
+            f"pi exited with code {result.returncode}: {result.stderr[:500]}"
+        )
 
     return result.stdout
 
