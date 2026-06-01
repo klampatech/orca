@@ -177,7 +177,7 @@ class TestClaimTask:
         assert result["status"] == "claimed"
         assert result["id"] == task["id"]
 
-    def test_returns_none_when_no_tasks(self):
+    def test_returns_none_when_no_tasks(self, db):
         """Should return None when no available tasks."""
         from orca.models.task import claim_task
 

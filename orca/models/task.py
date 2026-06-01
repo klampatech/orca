@@ -127,7 +127,7 @@ def get_task(task_id: str) -> Optional[dict[str, Any]]:
     """
     conn = get_connection()
     row = conn.execute(
-        "SELECT id, spec_path, description, status, priority, created_at, claimed_at, completed_at, result_summary, parent_id, root_spec_path, ir_snippet FROM tasks WHERE id = ?",
+        "SELECT id, spec_path, description, status, priority, created_at, claimed_at, completed_at, result_summary, parent_id, root_spec_path, ir_snippet, failure_count, last_error FROM tasks WHERE id = ?",
         (task_id,),
     ).fetchone()
 
@@ -147,6 +147,8 @@ def get_task(task_id: str) -> Optional[dict[str, Any]]:
         "parent_id": row[9],
         "root_spec_path": row[10],
         "ir_snippet": row[11],
+        "failure_count": row[12],
+        "last_error": row[13],
     }
 
 
@@ -198,7 +200,7 @@ def update_task_status(
 
     Args:
         task_id: Task ID.
-        status: New status ('completed' or 'failed').
+        status: New status ('completed', 'available' (on retry), or 'failed').
         result_summary: Optional result or error message.
 
     Returns:
@@ -206,11 +208,23 @@ def update_task_status(
     """
     conn = get_connection()
     now = utcnow()
-    cursor = conn.execute(
-        "UPDATE tasks SET status = ?, completed_at = ?, result_summary = ? WHERE id = ?",
-        (status, now, result_summary, task_id),
-    )
+
+    # If returning to pool (status='available' after a failure), increment failure_count
+    if status == 'available' and result_summary:
+        cursor = conn.execute(
+            "UPDATE tasks SET status = ?, completed_at = ?, result_summary = ?, failure_count = failure_count + 1, last_error = ? WHERE id = ?",
+            (status, now, result_summary, result_summary[:500] if result_summary else None, task_id),
+        )
+    else:
+        cursor = conn.execute(
+            "UPDATE tasks SET status = ?, completed_at = ?, result_summary = ? WHERE id = ?",
+            (status, now, result_summary, task_id),
+        )
     return cursor.rowcount > 0
+
+
+# Maximum number of failures before a task is excluded from claiming
+MAX_FAILURE_COUNT = 5
 
 
 def claim_task(loop_id: str) -> Optional[dict[str, Any]]:
@@ -232,17 +246,22 @@ def claim_task(loop_id: str) -> Optional[dict[str, Any]]:
     reclaim_stale_task_runs(conn)
 
     # Exclude children of validation roots (Phase 2)
-    # Only claim tasks where parent is NOT a validation-root
+    # Exclude parent tasks (tasks that have children) — only claim leaf tasks
+    # Exclude tasks whose parent is in 'validation' status
+    # Exclude tasks that have failed too many times (retry limit)
     row = conn.execute(
         """
         SELECT id, spec_path, description, priority, parent_id, root_spec_path, ir_snippet
         FROM tasks
         WHERE status = 'available'
+          AND failure_count < ?
           AND (parent_id IS NULL
                OR parent_id NOT IN (SELECT id FROM tasks WHERE status = 'validation'))
+          AND id NOT IN (SELECT DISTINCT parent_id FROM tasks WHERE parent_id IS NOT NULL)
         ORDER BY priority DESC, created_at ASC
         LIMIT 1
         """,
+        (MAX_FAILURE_COUNT,),
     ).fetchone()
 
     if not row:

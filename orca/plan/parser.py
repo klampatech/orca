@@ -6,6 +6,7 @@ for further processing (decomposition, validation, etc.).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,8 @@ from .schema import (
     PlanMetadata,
     compute_hash,
     validate_format,
+    deduplicate_features,
+    deduplicate_tasks,
 )
 
 
@@ -36,6 +39,10 @@ def parse_plan(path: Path | str) -> Plan:
         raise FileNotFoundError(f"Plan file not found: {path}")
 
     content = path.read_text()
+
+    # Auto-deduplicate FEAT and TASK sections before processing
+    content = deduplicate_features(content)
+    content = deduplicate_tasks(content)
     plan = Plan.from_content(content)
 
     # Validate format
@@ -58,6 +65,10 @@ def parse_plan_content(content: str) -> Plan:
     Raises:
         ValueError: If plan format is invalid.
     """
+    # Auto-deduplicate FEAT and TASK sections before validation
+    content = deduplicate_features(content)
+    content = deduplicate_tasks(content)
+
     valid, errors = validate_format(content)
     if not valid:
         raise ValueError("Invalid plan format:\n  - " + "\n  - ".join(errors))
@@ -294,7 +305,7 @@ def generate_tasks_from_plan(plan: Plan) -> list[dict]:
                 "priority": 10,
                 "parent_id": None,
                 "root_spec_path": plan.metadata.spec_path,
-                "ir_snippet": str(feature_snippet),
+                "ir_snippet": json.dumps(feature_snippet),
             }
         )
 
@@ -312,7 +323,7 @@ def generate_tasks_from_plan(plan: Plan) -> list[dict]:
                     "priority": 8,
                     "parent_id": None,
                     "root_spec_path": plan.metadata.spec_path,
-                    "ir_snippet": str(task_snippet),
+                    "ir_snippet": json.dumps(task_snippet),
                 }
             )
 
@@ -330,7 +341,7 @@ def generate_tasks_from_plan(plan: Plan) -> list[dict]:
                 "priority": 7,
                 "parent_id": None,
                 "root_spec_path": plan.metadata.spec_path,
-                "ir_snippet": str(task_snippet),
+                "ir_snippet": json.dumps(task_snippet),
             }
         )
 

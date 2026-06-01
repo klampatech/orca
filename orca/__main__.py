@@ -117,6 +117,21 @@ def build_parser() -> argparse.ArgumentParser:
     # reclaim
     sub.add_parser("reclaim", help="Reclaim tasks with expired heartbeats")
 
+    # cleanup
+    cleanup = sub.add_parser("cleanup", help="Clean up zombie processes and stuck loops")
+    cleanup.add_argument(
+        "--zombies", action="store_true",
+        help="Kill zombie test processes (npm test, jest, pytest, etc.)"
+    )
+    cleanup.add_argument(
+        "--stuck", action="store_true",
+        help="Reset tasks that have been claimed for too long (expired heartbeats)"
+    )
+    cleanup.add_argument(
+        "--all", action="store_true",
+        help="Run all cleanup operations"
+    )
+
     # log
     log = sub.add_parser("log", help="Show task run history")
     log.add_argument("task_id", help="Task ID")
@@ -185,12 +200,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip test verification entirely"
     )
     loop.add_argument(
+        "--no-targeted", action="store_true",
+        help="Run full test suite instead of targeting changed files"
+    )
+    loop.add_argument(
         "--spec-only", action="store_true",
         help="Add spec file path to prompt"
     )
     loop.add_argument(
         "-v", "--verbose", action="store_true",
         help="Show detailed output including full error context"
+    )
+    loop.add_argument(
+        "--cleanup-zombies", action="store_true",
+        help="Clean up zombie test processes before running tests"
     )
 
     # loops

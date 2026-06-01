@@ -133,7 +133,11 @@ def handle_complete(args) -> dict:
     complete_task_run(args.task_id, loop_id, exit_status=0, result_summary=args.result)
     update_task_status(args.task_id, "completed", result_summary=args.result)
 
-    _trigger_feature_validation_if_complete(args.task_id, loop_id)
+    # Only trigger HSV validation if --no-verify is NOT set
+    if not run_verification:
+        print("[complete] Skipping HSV validation (--no-verify)")
+    else:
+        _trigger_feature_validation_if_complete(args.task_id, loop_id)
 
     return {
         "command": "complete",

@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     parent_id       TEXT REFERENCES tasks(id),
     root_spec_path  TEXT,
     ir_snippet      TEXT,
+    failure_count   INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT,
     CHECK (status IN ('available', 'claimed', 'completed', 'failed',
                       'validation', 'blocked'))
 );
@@ -56,6 +58,9 @@ CREATE TABLE IF NOT EXISTS hidden_scenario_runs (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_avail ON tasks(priority DESC, created_at ASC) WHERE status = 'available';
+
+-- Tasks that have failed too many times are excluded from claiming
+CREATE INDEX IF NOT EXISTS idx_tasks_failure ON tasks(failure_count) WHERE failure_count >= 5;
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_expire ON task_runs(heartbeat_at) WHERE completed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hsr_feature ON hidden_scenario_runs(feature_id);

@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Set
 
+from ..plan.schema import deduplicate_features, deduplicate_tasks
 from ..utils.spinner import WhaleSpinner
 
 
@@ -152,6 +153,10 @@ class PlanGenerator:
 
             # Clean markdown code blocks if Claude wrapped output
             plan_content = self._unwrap_markdown(plan_content)
+
+            # Deduplicate FEAT and TASK sections (Claude sometimes appends duplicates)
+            plan_content = deduplicate_features(plan_content)
+            plan_content = deduplicate_tasks(plan_content)
 
             # Save this iteration's output as "previous" for next iteration
             previous_plan = plan_content
@@ -348,7 +353,6 @@ def handle_plan(args) -> dict:
     result = generator.generate(
         spec_content,
         spec_display,
-        str(spec_path),  # Use actual path, not display string
         output_path,
         existing_plan_content=existing_plan_content,
     )

@@ -20,8 +20,8 @@ from typing import Optional
 # Regex Patterns
 # --------------------------------------------------------------------
 
-# Matches: `- [ ] TASK-001: Some task description`
-TASK_PATTERN = re.compile(r"^- \[ \] (TASK-\d+):\s*(.+)$")
+# Matches: `- [ ] TASK-001: Some task description` OR `- [x] TASK-001: Completed task`
+TASK_PATTERN = re.compile(r"^- \[.\] (TASK-\d+):\s*(.+)$")
 
 # Matches: `### FEAT-001: Some feature description`
 FEAT_PATTERN = re.compile(r"^### (FEAT-\d+):\s*(.+)$")
@@ -370,6 +370,110 @@ def compute_hash_from_content(content: str) -> str:
     """Compute hash directly from content."""
     plan = Plan.from_content(content)
     return compute_hash(plan.get_all_tasks())
+
+
+def deduplicate_features(content: str) -> str:
+    """Remove duplicate FEAT sections, keeping only the first occurrence.
+
+    When Claude Code refines a plan iteratively, it sometimes appends duplicate
+    FEAT sections instead of updating existing ones. This function deduplicates
+    them by keeping only the first occurrence of each FEAT-ID.
+
+    Args:
+        content: Raw markdown plan content.
+
+    Returns:
+        Content with duplicate FEAT sections removed.
+    """
+    lines = content.splitlines()
+    result_lines: list[str] = []
+    seen_feature_ids: set[str] = set()
+    skipping = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = FEAT_PATTERN.match(line)
+
+        if m:
+            feat_id = m.group(1)
+            if feat_id in seen_feature_ids:
+                # Start skipping this duplicate feature block
+                skipping = True
+                i += 1
+                continue
+            else:
+                seen_feature_ids.add(feat_id)
+                skipping = False
+                result_lines.append(line)
+                i += 1
+                continue
+
+        if skipping:
+            # Skip lines until we hit a separator (end of features section)
+            # or another feature header (which the loop above will handle)
+            if SEPARATOR_PATTERN.match(line):
+                skipping = False
+                result_lines.append(line)
+            i += 1
+            continue
+
+        result_lines.append(line)
+        i += 1
+
+    return "\n".join(result_lines)
+
+
+def deduplicate_tasks(content: str) -> str:
+    """Remove duplicate task lines, keeping only the first occurrence.
+
+    When Claude Code refines a plan iteratively, it sometimes appends duplicate
+    task lines instead of updating existing ones. This function deduplicates
+    them by keeping only the first occurrence of each TASK-ID.
+
+    Args:
+        content: Raw markdown plan content.
+
+    Returns:
+        Content with duplicate task lines removed.
+    """
+    lines = content.splitlines()
+    result_lines: list[str] = []
+    seen_task_ids: set[str] = set()
+    skipping = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = TASK_PATTERN.match(line)
+
+        if m:
+            task_id = m.group(1)
+            if task_id in seen_task_ids:
+                # Skip this duplicate task line
+                skipping = True
+                i += 1
+                continue
+            else:
+                seen_task_ids.add(task_id)
+                skipping = False
+                result_lines.append(line)
+                i += 1
+                continue
+
+        # Only skip if we're in a duplicate task block
+        # Stop skipping at feature headers or separators
+        if skipping:
+            if FEAT_PATTERN.match(line) or SEPARATOR_PATTERN.match(line) or FEATURES_HEADER_PATTERN.match(line):
+                skipping = False
+                result_lines.append(line)
+            i += 1
+            continue
+
+        result_lines.append(line)
+        i += 1
+
+    return "\n".join(result_lines)
 
 
 def validate_format(content: str) -> tuple[bool, list[str]]:

@@ -4,6 +4,7 @@ from typing import Callable
 
 from .add import format_add_human, handle_add
 from .claim import format_claim_human, handle_claim
+from .cleanup import format_cleanup_human, handle_cleanup
 from .complete import format_complete_human, handle_complete
 from .decompose import format_decompose_human, handle_decompose
 from .fail import format_fail_human, handle_fail
@@ -32,6 +33,7 @@ COMMANDS: dict[str, tuple[Handler, Formatter]] = {
     "init": (handle_init, format_init_human),
     "add": (handle_add, format_add_human),
     "claim": (handle_claim, format_claim_human),
+    "cleanup": (handle_cleanup, format_cleanup_human),
     "heartbeat": (handle_heartbeat, format_heartbeat_human),
     "complete": (handle_complete, format_complete_human),
     "fail": (handle_fail, format_fail_human),
