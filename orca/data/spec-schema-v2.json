@@ -1,9 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "OrcaSpec",
-  "description": "Validated spec as structured IR for Orca task decomposition into independently claimable tasks.",
+  "description": "Validated spec as structured IR for Orca task decomposition into independently claimable tasks. Supports both application specs and tool/implementation specs.",
   "type": "object",
-  "required": ["project", "coreFeatures", "technicalApproach", "testingStrategy", "acceptanceCriteria"],
+  "required": ["project", "technicalApproach"],
+  
+  "schemaVersion": "2.1",
 
   "properties": {
     "project": {
@@ -31,17 +33,24 @@
         "successCriteria": {
           "type": "string",
           "minLength": 20
+        },
+        "specType": {
+          "type": "string",
+          "enum": ["application", "tool", "hybrid", "unknown"],
+          "default": "unknown",
+          "description": "Type of spec: application (features & ACs), tool (prompts & protocols), hybrid (both)"
         }
       }
     },
 
     "coreFeatures": {
       "type": "object",
+      "description": "Feature decomposition. Optional for tool specs — if systemPrompts or conversationProtocol exist, this becomes optional.",
       "required": ["mustHave"],
       "properties": {
         "mustHave": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "items": {
             "type": "object",
             "required": ["id", "description"],
@@ -76,8 +85,7 @@
                         },
                         "criterion": {
                           "type": "string",
-                          "pattern": "^Given.*When.*Then.*$",
-                          "description": "Given/When/Then format"
+                          "description": "Acceptance criterion. Format: Given...When...Then... (application) or free-form (tool)"
                         }
                       }
                     }
@@ -93,8 +101,7 @@
                           "pattern": "^AC-[0-9]+$"
                         },
                         "criterion": {
-                          "type": "string",
-                          "pattern": "^Given.*When.*Then.*$"
+                          "type": "string"
                         }
                       }
                     }
@@ -124,10 +131,10 @@
                     "type": "array",
                     "items": {
                       "type": "object",
-                      "required": ["id", "criterion"],
+                      "required": ["criterion"],
                       "properties": {
                         "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
-                        "criterion": { "type": "string", "pattern": "^Given.*When.*Then.*$" }
+                        "criterion": { "type": "string" }
                       }
                     }
                   },
@@ -135,10 +142,10 @@
                     "type": "array",
                     "items": {
                       "type": "object",
-                      "required": ["id", "criterion"],
+                      "required": ["criterion"],
                       "properties": {
                         "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
-                        "criterion": { "type": "string", "pattern": "^Given.*When.*Then.*$" }
+                        "criterion": { "type": "string" }
                       }
                     }
                   }
@@ -167,10 +174,10 @@
                     "type": "array",
                     "items": {
                       "type": "object",
-                      "required": ["id", "criterion"],
+                      "required": ["criterion"],
                       "properties": {
                         "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
-                        "criterion": { "type": "string", "pattern": "^Given.*When.*Then.*$" }
+                        "criterion": { "type": "string" }
                       }
                     }
                   },
@@ -178,10 +185,10 @@
                     "type": "array",
                     "items": {
                       "type": "object",
-                      "required": ["id", "criterion"],
+                      "required": ["criterion"],
                       "properties": {
                         "id": { "type": "string", "pattern": "^AC-[0-9]+$" },
-                        "criterion": { "type": "string", "pattern": "^Given.*When.*Then.*$" }
+                        "criterion": { "type": "string" }
                       }
                     }
                   }
@@ -204,7 +211,11 @@
         },
         "architecture": {
           "type": "string",
-          "enum": ["monolith", "microservices", "serverless", "library", "cli", "daemon", "web", "mobile", "desktop", "embedded", "unknown"],
+          "enum": [
+            "monolith", "microservices", "serverless", "library", "cli", "daemon", "web", 
+            "mobile", "desktop", "embedded", "unknown", "tool", "agentic", "pipeline", 
+            "single-process", "multi-process", "orchestration"
+          ],
           "description": "Architecture style"
         },
         "framework": {
@@ -233,13 +244,79 @@
       }
     },
 
+    "systemPrompts": {
+      "type": "object",
+      "description": "System prompt templates for multi-agent, tool, or LLM-driven systems. Each property is a named prompt.",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "examples": [
+        "{\"interrogator\": \"You are an interrogator...\", \"respondee\": \"You are a subject matter expert...\"}"
+      ]
+    },
+
+    "conversationProtocol": {
+      "type": "object",
+      "description": "Protocol for multi-turn conversations or interactions between agents.",
+      "properties": {
+        "fileFormat": {
+          "type": "string",
+          "description": "Format of conversation logs (e.g., 'jsonl', 'markdown', 'csv')"
+        },
+        "delimiter": {
+          "type": "string",
+          "description": "Delimiter used to separate output sections (e.g., '---RESPONDEE_REVIEW_ONLY---')"
+        },
+        "turnTypes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Types of turns in the conversation (e.g., 'question', 'answer', 'synthesis')"
+        },
+        "outputSections": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Expected sections in each output (e.g., '[SYNTHESIZED SPEC DRAFT]', '[NEXT QUESTION]')"
+        },
+        "stateManagement": {
+          "type": "string",
+          "description": "How conversation state is managed (e.g., 'file-backed', 'memory-only', 'database')"
+        },
+        "sessionFormat": {
+          "type": "string",
+          "description": "Format description for session directories and files"
+        }
+      }
+    },
+
+    "fileStructure": {
+      "type": "array",
+      "description": "Project file and directory structure. Captures layout that would otherwise be lost.",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File or directory path (e.g., 'orchestrator.py', 'templates/interrogator.txt')"
+          },
+          "purpose": {
+            "type": "string",
+            "description": "Purpose or function of this file"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["file", "directory", "template", "config", "data"],
+            "description": "Type of entry"
+          }
+        }
+      }
+    },
+
     "testingStrategy": {
       "type": "object",
-      "required": ["unitTests", "integrationTests"],
       "properties": {
         "unitTests": {
           "type": "object",
-          "required": ["covered"],
           "properties": {
             "covered": { "type": "boolean" },
             "framework": { "type": "string", "default": "unknown" },
@@ -248,7 +325,6 @@
         },
         "integrationTests": {
           "type": "object",
-          "required": ["covered"],
           "properties": {
             "covered": { "type": "boolean" },
             "approach": {
@@ -279,20 +355,18 @@
 
     "acceptanceCriteria": {
       "type": "object",
-      "description": "Project-level acceptance criteria — holistic validation, NOT used for task decomposition. For per-feature task creation, use coreFeatures[].acceptanceCriteria instead.",
+      "description": "Project-level acceptance criteria — holistic validation. Format varies by specType (Given/When/Then for application, free-form for tool).",
       "properties": {
         "happyPath": {
           "type": "array",
           "items": {
-            "type": "string",
-            "pattern": "^Given.*When.*Then.*$"
+            "type": "string"
           }
         },
         "errorHandling": {
           "type": "array",
           "items": {
-            "type": "string",
-            "pattern": "^Given.*When.*Then.*$"
+            "type": "string"
           }
         },
         "performance": {
@@ -317,7 +391,8 @@
       "properties": {
         "version": { "type": "string" },
         "created": { "type": "string", "format": "date" },
-        "author": { "type": "string" }
+        "author": { "type": "string" },
+        "schemaVersion": { "type": "string", "description": "Schema version used to validate this IR" }
       }
     }
   }
