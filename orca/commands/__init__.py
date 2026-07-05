@@ -11,6 +11,7 @@ from .init import format_init_human, handle_init
 from .list import format_list_human, handle_list
 from .log import format_log_human, handle_log
 from .loop import format_loop_human, format_loops_human, handle_loop, handle_loops
+from .plan import format_plan_human, handle_plan
 from .reclaim import format_reclaim_human, handle_reclaim
 from .refine import format_refine_human, handle_refine
 from .status import format_status_human, handle_status
@@ -24,6 +25,7 @@ COMMANDS = {
     "fail": (handle_fail, format_fail_human),
     "decompose": (handle_decompose, format_decompose_human),
     "refine": (handle_refine, format_refine_human),
+    "plan": (handle_plan, format_plan_human),
     "status": (handle_status, format_status_human),
     "list": (handle_list, format_list_human),
     "reclaim": (handle_reclaim, format_reclaim_human),

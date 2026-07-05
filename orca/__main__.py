@@ -108,6 +108,13 @@ def build_parser() -> argparse.ArgumentParser:
     refine.add_argument("--max-iterations", type=int, default=5, help="Max refine loops (default: 5)")
     refine.add_argument("--pi-skill", default="ir-spec-generator", help="pi skill to use (default: ir-spec-generator)")
 
+    # plan
+    plan = sub.add_parser("plan", help="Generate iteratively refined IMPLEMENTATION_PLAN.md from spec(s)")
+    plan.add_argument("specs", nargs="+", help="Path to spec file(s)")
+    plan.add_argument("--output", help="Override output path (default: <spec-dir>/IMPLEMENTATION_PLAN.md)")
+    plan.add_argument("--max-iterations", type=int, default=10, help="Max plan loops (default: 10)")
+    plan.add_argument("--pi-skill", default="plan", help="pi skill to use (default: plan)")
+
     # loop
     loop = sub.add_parser("loop", help="Spawn a Ralph loop in a new terminal window")
     loop.add_argument("--claim-only", action="store_true", help="Claim one task and exit immediately")
