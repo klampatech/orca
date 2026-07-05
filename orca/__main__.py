@@ -113,7 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("specs", nargs="+", help="Path to spec file(s)")
     plan.add_argument("--output", help="Override output path (default: <spec-dir>/IMPLEMENTATION_PLAN.md)")
     plan.add_argument("--max-iterations", type=int, default=10, help="Max plan loops (default: 10)")
-    plan.add_argument("--pi-skill", default="plan", help="pi skill to use (default: plan)")
+    plan.add_argument("--pi-skill", default="plan", help="pi skill to use (default: plan) [pi harness only]")
+    plan.add_argument(
+        "--harness",
+        default="claude",
+        choices=["pi", "claude", "codex"],
+        help="LLM harness to use (default: claude). pi=pi-coding-agent, claude=claude-code CLI, codex=openai codex CLI.",
+    )
 
     # loop
     loop = sub.add_parser("loop", help="Spawn a Ralph loop in a new terminal window")

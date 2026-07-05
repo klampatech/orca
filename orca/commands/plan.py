@@ -7,6 +7,11 @@ Uses an LLM as judge with two completion criteria:
 
 The command runs up to max_iterations, producing an IMPLEMENTATION_PLAN.md
 in the same directory as the primary spec file.
+
+Supports multiple LLM harnesses:
+- pi       (available via --harness pi)
+- claude   (default as of this refactor; available via --harness claude)
+- codex    (pass-through stub; available via --harness codex)
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 
 # --------------------------------------------------------------------
@@ -22,6 +28,8 @@ from pathlib import Path
 
 DEFAULT_MAX_ITERATIONS = 10
 DEFAULT_PI_SKILL = "plan"
+DEFAULT_HARNESS = "claude"
+VALID_HARNESSES = ["pi", "claude", "codex"]
 
 
 # --------------------------------------------------------------------
@@ -60,6 +68,30 @@ def _resolve_skill_path(skill_name: str) -> str | None:
         if path.exists():
             return str(path.parent if path.name == "SKILL.md" else path)
     return None
+
+
+def _run_harness(harness: str, prompt: str, skill: str | None = None) -> str:
+    """Dispatch to the appropriate LLM harness.
+
+    Args:
+        harness: One of "pi", "claude", "codex".
+        prompt:  The prompt to send to the harness.
+        skill:   pi skill name (only used when harness == "pi").
+
+    Returns:
+        The raw output from the harness.
+
+    Raises:
+        RuntimeError: If the harness binary is not found or fails.
+    """
+    if harness == "pi":
+        return _run_pi(prompt, skill)
+    elif harness == "claude":
+        return _run_claude(prompt, skill)
+    elif harness == "codex":
+        return _run_codex(prompt, skill)
+    else:
+        raise ValueError(f"Unknown harness: {harness!r}. Valid: {VALID_HARNESSES}")
 
 
 def _run_pi(prompt: str, skill: str | None = None) -> str:
@@ -101,6 +133,92 @@ def _run_pi(prompt: str, skill: str | None = None) -> str:
     if result.returncode != 0:
         raise RuntimeError(
             f"pi exited with code {result.returncode}: {result.stderr[:500]}"
+        )
+
+    return result.stdout
+
+
+def _run_claude(prompt: str, skill: str | None = None) -> str:
+    """Run claude-code CLI in print mode with a prompt.
+
+    Args:
+        prompt: The prompt to send to claude.
+        skill:  Ignored (claude-code skills are a different system from pi skills).
+
+    Returns:
+        The raw output from claude-code.
+
+    Raises:
+        RuntimeError: If claude is not found or fails.
+    """
+    claude_cmd = shutil.which("claude")
+    if claude_cmd is None:
+        raise RuntimeError(
+            "claude CLI not found in PATH. Install it first:\n"
+            "  npm install -g @anthropic-ai/claude-code\n"
+            "  # or: npm install -g claude-code\n"
+            "  # then authenticate: claude auth"
+        )
+
+    # Use -p - to read prompt from stdin, avoiding shell quoting issues
+    # with very long prompts that would exceed argv limits.
+    proc = subprocess.Popen(
+        [claude_cmd, "-p", "-"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    try:
+        stdout, stderr = proc.communicate(input=prompt, timeout=300)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise RuntimeError("claude timed out after 300 seconds")
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"claude exited with code {proc.returncode}: {stderr[:500]}"
+        )
+
+    return stdout
+
+
+def _run_codex(prompt: str, skill: str | None = None) -> str:
+    """Run codex CLI in print mode with a prompt (stub implementation).
+
+    Args:
+        prompt: The prompt to send to codex.
+        skill:  Ignored.
+
+    Returns:
+        The raw output from codex.
+
+    Raises:
+        RuntimeError: If codex is not found or fails.
+    """
+    codex_cmd = shutil.which("codex")
+    if codex_cmd is None:
+        raise RuntimeError(
+            "codex CLI not found in PATH. Install it first:\n"
+            "  # OpenAI Codex: https://platform.openai.com/docs/codex\n"
+            "  # Or use the official codex CLI package"
+        )
+
+    # codex CLI: `codex -p <prompt>` is typical
+    cmd = [codex_cmd, "-p", prompt]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"codex exited with code {result.returncode}: {result.stderr[:500]}"
         )
 
     return result.stdout
@@ -294,7 +412,8 @@ def handle_plan(args) -> dict:
         args.specs: List of spec file paths.
         args.output: Override output path.
         args.max_iterations: Max plan loops.
-        args.pi_skill: pi skill to use.
+        args.pi_skill: pi skill to use (pi harness only; no-op for claude/codex).
+        args.harness: LLM harness to use ("pi", "claude", "codex").
 
     Returns:
         Result dict with iteration count and status.
@@ -316,6 +435,18 @@ def handle_plan(args) -> dict:
     # Config
     max_iterations = getattr(args, "max_iterations", None) or DEFAULT_MAX_ITERATIONS
     pi_skill = getattr(args, "pi_skill", None) or DEFAULT_PI_SKILL
+    harness = getattr(args, "harness", None) or DEFAULT_HARNESS
+
+    if harness not in VALID_HARNESSES:
+        raise ValueError(f"Invalid --harness value: {harness!r}. Valid: {VALID_HARNESSES}")
+
+    # AC6: --pi-skill is only meaningful for pi harness
+    if harness != "pi" and getattr(args, "pi_skill", None):
+        warnings.warn(
+            f"--pi-skill is only used when --harness pi. "
+            f"Current harness is {harness}. Ignoring --pi-skill.",
+            UserWarning,
+        )
 
     # Read spec contents
     spec_names = [p.name for p in spec_paths]
@@ -323,8 +454,12 @@ def handle_plan(args) -> dict:
 
     print(f"Planning from: {', '.join(spec_names)}")
     print(f"  Output: {output_path}")
+    print(f"  Harness: {harness}")
     print(f"  Max iterations: {max_iterations}")
-    print(f"  pi skill: {pi_skill}")
+    if harness == "pi":
+        print(f"  pi skill: {pi_skill}")
+    else:
+        print(f"  pi skill: (not used with {harness} harness)")
     print()
 
     # State for two completion criteria
@@ -359,18 +494,19 @@ def handle_plan(args) -> dict:
                 judge_notes=None if mode == "generate" else None,
             )
 
-            raw_output = _run_pi(prompt, pi_skill)
+            # Use the selected harness; skill arg only meaningful for pi
+            raw_output = _run_harness(harness, prompt, pi_skill if harness == "pi" else None)
             plan_content = _strip_markdown_fence(raw_output)
 
             if not plan_content:
-                print(f"  ! pi returned empty output, retrying...")
+                print(f"  ! {harness} returned empty output, retrying...")
                 last_plan_content = None
                 continue
 
             # Reject non-plan outputs (commentary, JSON, etc.)
             if not _is_valid_plan(plan_content):
                 snippet = plan_content[:100].replace("\n", " ")
-                print(f"  ! pi returned non-plan output, retrying...")
+                print(f"  ! {harness} returned non-plan output, retrying...")
                 print(f"    Got: {snippet}...")
                 last_plan_content = None
                 continue
@@ -394,10 +530,10 @@ def handle_plan(args) -> dict:
             output_path.write_text(plan_content)
 
         except subprocess.TimeoutExpired:
-            print(f"  ! pi timed out (300s)")
+            print(f"  ! {harness} timed out (300s)")
             continue
         except RuntimeError as e:
-            print(f"  ! pi error: {e}")
+            print(f"  ! {harness} error: {e}")
             continue
 
         # ----- Phase 2: Judge the plan -----
@@ -405,7 +541,7 @@ def handle_plan(args) -> dict:
 
         try:
             judge_prompt = _build_judge_prompt(spec_contents, spec_names, plan_content)
-            judge_output = _run_pi(judge_prompt, pi_skill)
+            judge_output = _run_harness(harness, judge_prompt, pi_skill if harness == "pi" else None)
 
             is_complete, judge_notes = _is_complete_verdict(judge_output)
 
@@ -439,6 +575,7 @@ def handle_plan(args) -> dict:
                     "output_path": str(output_path),
                     "complete": True,
                     "hash_stable": True,
+                    "harness": harness,
                     "all_plans": all_plans,
                 }
             elif is_complete:
@@ -486,6 +623,7 @@ def handle_plan(args) -> dict:
             "output_path": str(output_path),
             "complete": False,
             "hash_stable": consecutive_hash_match >= 2,
+            "harness": harness,
             "all_plans": all_plans,
         }
 
@@ -494,16 +632,18 @@ def handle_plan(args) -> dict:
         "status": "error",
         "iterations": iteration,
         "output_path": str(output_path),
+        "harness": harness,
     }
 
 
 def format_plan_human(result: dict) -> str:
     """Format plan result for human display."""
     status = result["status"]
+    harness = result.get("harness", "unknown")
 
     if status == "success":
         lines = [
-            f"✓ Plan generated in {result['iterations']} iteration(s)",
+            f"✓ Plan generated in {result['iterations']} iteration(s) using {harness}",
             f"  Output: {result['output_path']}",
             f"  Hash: {result['final_hash']}",
             f"  LLM judge: COMPLETE",
@@ -519,7 +659,7 @@ def format_plan_human(result: dict) -> str:
 
     elif status == "max_iterations":
         lines = [
-            f"✗ Max iterations reached ({result['iterations']})",
+            f"✗ Max iterations reached ({result['iterations']}) using {harness}",
             f"  Output: {result['output_path']}",
             f"  Final hash: {result.get('final_hash', 'unknown')}",
         ]
